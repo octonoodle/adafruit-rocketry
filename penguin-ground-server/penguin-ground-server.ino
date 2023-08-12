@@ -14,7 +14,7 @@
 // Singleton instance of the radio driver
 //RH_RF95 rf95;
 //RH_RF95 rf95(5, 2); // Rocket Scream Mini Ultra Pro with the RFM95W
-RH_RF95 rf95(8, 3);  // Adafruit Feather M0 with RFM95
+RH_RF95 rf95(8, 3); // Adafruit Feather M0 with RFM95
 
 // Need this on Arduino Zero with SerialUSB port (eg RocketScream Mini Ultra Pro)
 //#define Serial SerialUSB
@@ -31,8 +31,7 @@ int led = 13;
 void setup() {
   pinMode(led, OUTPUT);
   Serial.begin(115200);
-  while (!Serial)
-    ;  // Wait for serial port to be available
+  while (!Serial);  // Wait for serial port to be available
   Serial.print("radio initializing... ");
 
   if (!rf95.init())
@@ -61,11 +60,11 @@ void unpack(float target[3], uint8_t buffer[RH_RF95_MAX_MESSAGE_LEN]) {
     Serial.print(", ");
   }
   Serial.println();
-  float sum = 100 * buffer[0] + buffer[1] + (buffer[2] / 100.0);
+  float sum = 100*buffer[0] + buffer[1] + (buffer[2]/100.0);
   target[0] = sum;
-  sum = 100 * buffer[3] + buffer[4] + (buffer[5] / 100.0);
+  sum = 100*buffer[3] + buffer[4] + (buffer[5]/100.0);
   target[1] = sum;
-  sum = buffer[6] + (buffer[7] / 100.0);
+  sum = buffer[6] + (buffer[7]/100.0);
   target[2] = sum;
 }
 
@@ -73,8 +72,8 @@ void loop() {
   if (Serial.available()) {
     Serial.println("You are typing something");
     String input = Serial.readString();
-    if (input.equals("kill")) {
-      Serial.println("terminating...");
+    if (input.equals("kill\n")) {
+      Serial.println("terminating datalogging...");
       //rgb.setPixelColor(0, 0, 0, 255);
       //rgb.show();
       while (1)
@@ -84,62 +83,49 @@ void loop() {
     }
   }
 
-  if (rf95.waitAvailableTimeout(60000)) {
-    Serial.println("message recieved, decoding...");
+  if (rf95.waitAvailableTimeout(10000)) {
+    Serial.println("Message request recieved, decoding...");
     // Should be a message for us now
     uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
     uint8_t len = sizeof(buf);
     if (rf95.recv(buf, &len)) {
       digitalWrite(led, HIGH);
-      RH_RF95::printBuffer("handshake: ", buf, len);
-      if (!strcmp((char *)buf, "Data Incoming")) {
-        Serial.println("handshake success");
+      RH_RF95::printBuffer("request: ", buf, len);
+      Serial.print("got request: ");
+      Serial.println((char *)buf);
 
-        // Send a reply
-        Serial.println("replying to handshake...");
-        uint8_t okSignal[] = "ready for data";
-        rf95.send(okSignal, sizeof(okSignal));
-        rf95.waitPacketSent();
-        digitalWrite(led, LOW);
+      // Send a reply
+      uint8_t okSignal[] = "ready for data";
+      rf95.send(okSignal, sizeof(okSignal));
+      rf95.waitPacketSent();
+      Serial.println("replying to handshake...");
+      digitalWrite(led, LOW);
 
-        if (rf95.waitAvailableTimeout(10000)) {
+      // wait for real data
+      while(!rf95.available());
 
-          // clear buffer
-          for (int i = 0; i < len; i++) {
-            buf[i] = 0;
-          }
-          if (rf95.recv(buf, &len)) {
-            digitalWrite(led, HIGH);
-            RH_RF95::printBuffer("successfully recieved data: ", buf, len);
-            float unpackedData[3];
-            unpack(unpackedData, buf);
-            for (int i = 0; i < 3; i++) {
-              Serial.println(unpackedData[i]);
-            }
-            Serial.println();
-            uint8_t newMessage[] = "data recieved!!";
-            //delay(100);
-            rf95.send(newMessage, sizeof(newMessage));
-            rf95.waitPacketSent();
-            Serial.println("acknowldeged data recieve success");
-            Serial.println();
-            Serial.println();
-          } else {
-            Serial.println("data recv failed");
-          }
-          digitalWrite(led, LOW);
-        } else {
-          Serial.println("no data recieved");
+      if(rf95.recv(buf, &len)) {
+        digitalWrite(led, HIGH);
+        Serial.println("successfully recieved data: ");
+        float unpackedData[3] = {0, 0, 0};
+        unpack(unpackedData, buf);
+        for (int i = 0; i < 3; i++) {
+          Serial.println(unpackedData[i]);
         }
+        Serial.print(buf[0]);
+        Serial.println();
+        uint8_t newMessage[] = "data recieved!!";
+        rf95.send(newMessage, sizeof(newMessage));
+        rf95.waitPacketSent();
+        Serial.println("acknowldeged data recieve success");
       } else {
-        Serial.print("handshake failed, recieved request \"");
-        Serial.print((char *)buf);
-        Serial.println("\"");
+        Serial.println("data recv failed");
       }
+      digitalWrite(led, LOW);
     } else {
       Serial.println("request recv failed");
     }
   } else {
-    Serial.println("no data recieved, listening again for 60s");
+    Serial.println("no data recieved, listening again for 10s");
   }
 }

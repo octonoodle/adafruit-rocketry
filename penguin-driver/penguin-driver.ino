@@ -15,6 +15,8 @@
 
 Adafruit_SPIFlash flash(&flashTransport);
 
+
+
 // file system object from SdFat
 FatVolume fatfs;
 
@@ -25,7 +27,7 @@ FatVolume fatfs;
 #define RF95_FREQ 915.0
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
-float SEALEVELPRESSURE_HPA = 1015.8;
+float SEALEVELPRESSURE_HPA = 1001.01657;
 #define DATA_FILE "bmp390.csv"
 
 File32 csvFile;
@@ -81,22 +83,22 @@ void setup() {
   Serial.print(RF95_FREQ);
   Serial.println("MHz");
 
-  Serial.println("enter power setting [5-23]:");
-  while (!Serial.available())
-    ;
-  int i = 0;
-  char c;
-  char num[5];
-  while (Serial.available() && i < 5) {  //get user defined power input
-    c = Serial.read();
-    num[i] = c;
-    i++;
-  }
-  int power;
-  power = atoi(num);
-  rf95.setTxPower(power, false);
+  //Serial.println("enter power setting [5-23]:");
+  //while (!Serial.available())
+  //  ;
+  //int i = 0;
+  //char c;
+  //char num[5];
+  //while (Serial.available() && i < 5) {  //get user defined power input
+   // c = Serial.read();
+   // num[i] = c;
+   // i++;
+ // }
+  //int power;
+  //power = atoi(num);
+  rf95.setTxPower(10, false);
   Serial.print("power set to ");
-  Serial.print(power);
+  Serial.print(10);
   Serial.println(" dBm");
 
   Serial.println("Radio configured");
@@ -104,11 +106,11 @@ void setup() {
 
   String input;
   input = "D";
-  Serial.println("use default sea level definition or set at current pressure? d/c");
-  while (!Serial.available()) {
-    delay(10);
-  }
-  input = Serial.readString();
+  // Serial.println("use default sea level definition or set at current pressure? d/c");
+  // while (!Serial.available()) {
+  //   delay(10);
+  // }
+  // input = Serial.readString();
   if (bmp.begin_I2C()) {
     Serial.println("valid BMP3 sensor found");
     if (input.equals("c")) {
@@ -117,7 +119,7 @@ void setup() {
       if (!bmp.performReading()) {
         Serial.println("failed");
       } else {
-        SEALEVELPRESSURE_HPA = (bmp.pressure/100);
+        SEALEVELPRESSURE_HPA = (bmp.pressure);
         Serial.println("success");
       }
     }
@@ -127,7 +129,6 @@ void setup() {
     while (1)
       ;
   }
-
 
   Serial.print("Configuring flash memory... ");
   if (!flash.begin()) {
@@ -190,21 +191,22 @@ void sendAndWait(float bmpData[3]) {
   uint8_t num3pt1 = (uint8_t)(floor(data3)); //xx
   uint8_t num3pt2 = (uint8_t)((data3 - num3pt1)*100); //yy
 
-  uint8_t data[8] = {num1pt1, num1pt2, num1pt3, num2pt1, num2pt2, num2pt3, num3pt1, num3pt2};
-  Serial.println("datapacket");
+  uint8_t data[] = {num1pt1, num1pt2, num1pt3, num2pt1, num2pt2, num2pt3, num3pt1, num3pt2};
+  
+  Serial.println("encoded message to send: ");
   for (int i = 0; i < 8; i++) {
-    Serial.print(data[i], HEX);
-    Serial.print(", ");
+    Serial.print(data[i]);
+    Serial.print(" ");
   }
   Serial.println();
-  delay(2000);
+  
   rf95.send(data, sizeof(data));
   rf95.waitPacketSent();
 
   uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
   uint8_t len = sizeof(buf);
 
-  if (rf95.waitAvailableTimeout(2000)) {
+  if (rf95.waitAvailableTimeout(500)) {
     if (rf95.recv(buf, &len)) {
       if (!strcmp((char *)buf, "data recieved!!")) {
         Serial.println("transmit success");
@@ -223,7 +225,7 @@ void sendAndWait(float bmpData[3]) {
 
 //char lineBuffer[20]; //xxxx.xx,yyy.y,zzzz.zz
 void loop() {
-  if (Serial.available()) {
+  if (Serial && Serial.available()) {
     Serial.println("You are typing something");
     String input = Serial.readString();
     if (input.equals("kill")) {
@@ -273,6 +275,7 @@ void loop() {
   uint8_t statusMessage[] = "Data Incoming";
   rf95.send(statusMessage, sizeof(statusMessage));
 
+  Serial.print("sending request... ");
   rf95.waitPacketSent();
 
   uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
@@ -295,5 +298,5 @@ void loop() {
     Serial.println("no response from server during ready check!");
   }
 
-  delay(2000);
+  delay(1000);
 }
