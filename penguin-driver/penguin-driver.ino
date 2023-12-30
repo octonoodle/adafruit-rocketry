@@ -1,3 +1,13 @@
+/*
+Integrated driver for the Penguin Electronics Payload
+
+to do list:
+- negative altitudes overflow, messed up in encoding (include sign bit?)
+- increase encoding efficiency by using direct binary?
+- gps :(((
+- clean up if(Serial) since they are all unnecessary
+*/
+
 #include <SPI.h>
 #include <RH_RF95.h>
 
@@ -15,7 +25,15 @@
 
 Adafruit_SPIFlash flash(&flashTransport);
 
+// custom serial port for GPS
+#include <Arduino.h>   // required before wiring_private.h
+#include "wiring_private.h" // pinPeripheral() function
 
+Uart GPSSerial (&sercom4, A2, A1, SERCOM_RX_PAD_1, UART_TX_PAD_0);
+void SERCOM4_Handler()
+{
+  GPSSerial.IrqHandler();
+}
 
 // file system object from SdFat
 FatVolume fatfs;
@@ -129,6 +147,25 @@ void setup() {
     while (1)
       ;
   }
+  Serial.print("Initializing GPS... ");
+  GPSSerial.begin(9600);
+  pinPeripheral(A1, PIO_SERCOM_ALT);
+  pinPeripheral(A2, PIO_SERCOM_ALT);
+
+  // GPSSerial.println("$PMTK220,2000*"); // config command for gps
+  // while(!GPSSerial.available());
+  // char ackBuf[16];int i;
+  // while(GPSSerial.available()) {
+  //   char c = GPSSerial.read();
+  //   ackBuf[i] = c;
+  //   i++;
+  //   if (c == '\n' || i == 16) break;
+  // }
+  // if (strcmp(ackBuf, "$PMTK010,003*2C\n")) { // gps replying successfully set to 0.2hz update
+  //   Serial.println("failed");
+  //   while(1);
+  // }
+  Serial.println("success");
 
   Serial.print("Configuring flash memory... ");
   if (!flash.begin()) {
@@ -169,7 +206,7 @@ void setup() {
 
  
 //xxxx.xx,yyyy.yy,zz.zz
-void sendAndWait(float bmpData[3]) {
+void encodeSend(float bmpData[3]) {
   // xxyy.zz
   float data1 = bmpData[0]; //float
   float data2 = bmpData[1];
@@ -239,6 +276,9 @@ void loop() {
     }
   }
 
+
+  ////////////////// BMP390 //////////////////
+
   if (!bmp.performReading()) {
     Serial.println("reading error");
     rgbError();
@@ -272,6 +312,52 @@ void loop() {
   Serial.print("Pressure: "); Serial.println(pressure);
   Serial.print("Temperature: "); Serial.println(temperature);
 
+  //////////////////  GPS   //////////////////
+
+  bool reading = GPSSerial.available();
+  //Serial.println(reading ? "true" : "false");
+  char buff[10];
+  // for (int i = 0; i < 10; i++) {
+  //   char c = GPSSerial.read();
+  //   buff[i] = c;
+  // }
+  // Serial.println(buff);
+  
+  int i = 0;
+  char sentence[128];
+  while (reading) {
+    char c = GPSSerial.read();
+    if (c == '$') {
+      i = 0;
+      // clear buffer since restarting to read
+      for (i; i < 128; i++) {
+        sentence[i] = '\0';
+      }
+      sentence[0] = '$';
+      i = 1;
+    } else if (c == '*') {
+      //Serial.println("nmea done");
+      sentence[i] = c;
+      reading = false;
+      Serial.print("Newest NMEA: ");
+      Serial.println(sentence);
+    } else if (i >= 128) {
+      //Serial.println("overflow");
+      // clear buffer since restarting to read
+      for (i; i < 128; i++) {
+        sentence[i] = '\0';
+      }
+      i = 0;
+    } else {
+      sentence[i] = c;
+      i++;
+    }
+  }
+
+  return;
+  //////////// Radio Transmission ////////////
+
+  // handshake message
   uint8_t statusMessage[] = "Data Incoming";
   rf95.send(statusMessage, sizeof(statusMessage));
 
@@ -281,11 +367,13 @@ void loop() {
   uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
   uint8_t len = sizeof(buf);
 
+  // wait for response
   if (rf95.waitAvailableTimeout(3000)) {
     if (rf95.recv(buf, &len)) {
+      // check proper handshake response
       if (!strcmp((char *)buf, "ready for data")) {
           Serial.println("handshake complete");
-          sendAndWait(dataPacket);
+          encodeSend(dataPacket);
         }
       else {
         Serial.print("error, recieved message: ");
