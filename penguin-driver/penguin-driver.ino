@@ -4,7 +4,6 @@ Integrated driver for the Penguin Electronics Payload
 to do list:
 - negative altitudes overflow, messed up in encoding (include sign bit?)
 - increase encoding efficiency by using direct binary?
-- gps :(((
 - clean up if(Serial) since they are all unnecessary
 */
 
@@ -260,7 +259,19 @@ void encodeSend(float bmpData[3]) {
   }
 }
 
-//char lineBuffer[20]; //xxxx.xx,yyy.y,zzzz.zz
+// checks if NMEA sentence is RMC (Recommended Minimum Coordinates) aka GPS data
+bool isRMC(char * sent) {
+  char msgType[6];
+  for (int i = 0; i < 6; i++) {
+    msgType[i] = sent[i];
+  }
+  return !strcmp(msgType, "$GNRMC");
+}
+
+// buffers to store NMEA data in case 
+// new data can't be read next loop
+char newestNMEA[128];
+char newestRMC[128];
 void loop() {
   if (Serial && Serial.available()) {
     Serial.println("You are typing something");
@@ -335,12 +346,10 @@ void loop() {
       }
       sentence[0] = '$';
       i = 1;
-    } else if (c == '*') {
+    } else if (c == '*') { //  <<<<<<<<<<<  sentence is done and while loop terminates
       //Serial.println("nmea done");
       sentence[i] = c;
-      reading = false;
-      Serial.print("Newest NMEA: ");
-      Serial.println(sentence);
+      reading = false; //  <<<<<<<<<<<
     } else if (i >= 128) {
       //Serial.println("overflow");
       // clear buffer since restarting to read
@@ -353,6 +362,17 @@ void loop() {
       i++;
     }
   }
+
+  if (sentence[0] == '$') { // hack to avoid keeping garbled data
+    strcpy(newestNMEA, sentence);
+    if (isRMC(newestNMEA)) { // update coordinates sentence if necessary
+      strcpy(newestRMC, newestNMEA);
+    }
+  }
+  Serial.print("newest NMEA: ");
+  Serial.println(newestNMEA);
+  Serial.print("newest RMC: ");
+  Serial.println(newestRMC);
 
   return;
   //////////// Radio Transmission ////////////
