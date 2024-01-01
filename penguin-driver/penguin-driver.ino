@@ -369,18 +369,16 @@ void loop() {
 
   // allocate how many seconds to attempting to find RMC?
   int timeoutSec = 5; // value below 5 not recommended for GPS updates at 1Hz
-  int timeoutChars = timeoutSec*200;
+  int timeoutChars = timeoutSec*9600/5;
 
 
   // 1.
-  Serial.println("waiting");
   while(GPSSerial.available()) {
     GPSSerial.read();
   }
-  Serial.println("waiting2");
+
   // 2.
   while(!GPSSerial.available());
-  Serial.println("waiting3");
   // 3.
   int i = 0;
   int j = 0;
@@ -404,12 +402,8 @@ void loop() {
           rmcValid = true;
           // 4.
           if (!isRMC(sentence)) {
-            Serial.println();
-            Serial.print("sent: ");
-            Serial.println(sentence);
-            // 5.
-            Serial.println("is not RMC! restarting...");
-            delay(100);
+            // continue to read from serial
+            delay(25);
             done = false;
             rmcValid = false;
             j = 0;
@@ -427,9 +421,9 @@ void loop() {
       if (i > timeoutChars) {
         done = true;
         Serial.println();
-        Serial.print("timeout reached (");
+        Serial.print("search timeout reached (");
         Serial.print(timeoutChars);
-        Serial.println(" chars)");
+        Serial.println(") chars");
       }
     } else {
       done = true;
@@ -437,22 +431,22 @@ void loop() {
       Serial.print("ended early at index: "); Serial.println(i);
     }
   }
-  Serial.println();
-  Serial.print("found: ");
-  Serial.println(sentence);
+  
   if (rmcValid) {
-    Serial.println("copying...");
+    Serial.println();
+    Serial.print("found: ");
+    Serial.println(sentence);
     strcpy(newestRMC, sentence);
   }
   Serial.println("DONE!");
-
+  delay(500);
   
   //////////// Radio Transmission ////////////
 
   // handshake message
   uint8_t statusMessage[] = "Data Incoming";
   rf95.send(statusMessage, sizeof(statusMessage));
-  
+
   Serial.print("sending request... ");
   rf95.waitPacketSent();
   return;
