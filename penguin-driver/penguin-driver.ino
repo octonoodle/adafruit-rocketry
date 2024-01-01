@@ -202,41 +202,73 @@ void setup() {
   csvFile.close();
   Serial.println("all systems are configured, beginning transmissions...");
 }
-
- 
-//xxxx.xx,yyyy.yy,zz.zz
-void encodeSend(float bmpData[3]) {
+//  alt     prsure   temp     lat       long   fix y/n
+// xxxx.xx, yyyy.yy, zz.zz, aaaa.aaaa, bbbbb.bbbb, c.0
+void encodeSend(float dataSet[6]) {
   // xxyy.zz
-  float data1 = bmpData[0]; //float
-  float data2 = bmpData[1];
-  float data3 = bmpData[2];
+  float alt = dataSet[0];
+  float pressure = dataSet[1];
+  float temp = dataSet[2];
+  bool negativeAlt = alt < 0;
+  float latitude = dataSet[3];
+  float longitude = dataSet[4];
+  bool validFix = (bool)(int)dataSet[5];
 
   // each float needs to be broken up into integer sections: 1234.56 -> [12], [34], [56]
-  
+
+  // since we already know if alt is negative, take abs to get pure digits and avoid negative overflow on unsigned int
+  alt = fabs(alt);
+
   // xxyy.zz
-  uint8_t num1pt1 = (uint8_t)(floor(data1 / 100)); //xx
-  uint8_t num1pt2 = (uint8_t)(floor(data1 - num1pt1*100)); //yy  
-  uint8_t num1pt3 = (uint8_t)(100*(data1 - num1pt1*100 - num1pt2)); //zz
+  uint8_t alt1 = (uint8_t)(floor(alt / 100)); //xx
+  uint8_t alt2 = (uint8_t)(floor(alt - alt1*100)); //yy  
+  uint8_t alt3 = (uint8_t)(100*(alt - alt1*100 - alt2)); //zz
 
   //xxyy.zz
-  uint8_t num2pt1 = (uint8_t)(floor(data2 / 100)); //xx
-  uint8_t num2pt2 = (uint8_t)(floor(data2 - num2pt1*100)); //yy  
-  uint8_t num2pt3 = (uint8_t)(100*(data2 - num2pt1*100 - num2pt2)); //zz
+  uint8_t pressure1 = (uint8_t)(floor(pressure / 100)); //xx
+  uint8_t pressure2 = (uint8_t)(floor(pressure - pressure1*100)); //yy  
+  uint8_t pressure3 = (uint8_t)(100*(pressure - pressure1*100 - pressure2)); //zz
   
 
-  uint8_t num3pt1 = (uint8_t)(floor(data3)); //xx
-  uint8_t num3pt2 = (uint8_t)((data3 - num3pt1)*100); //yy
+  uint8_t temp1 = (uint8_t)(floor(temp)); //xx
+  uint8_t temp2 = (uint8_t)((temp - temp1)*100); //yy
 
-  uint8_t data[] = {num1pt1, num1pt2, num1pt3, num2pt1, num2pt2, num2pt3, num3pt1, num3pt2};
+  uint8_t lat1;
+  uint8_t lat2;
+  uint8_t lat3;
+  uint8_t lat4;
+
+  uint8_t long1;
+  uint8_t long2;
+  uint8_t long3;
+  uint8_t long4;
+  uint8_t long5;
+  if (validFix) {
+    // aabb.ccdd
+    lat1 = (uint8_t)(floor(latitude / 100)); // aa
+    lat2 = (uint8_t)(floor(latitude - lat1*100)); //bb 
+    lat3 = (uint8_t)(floor(100*(latitude - lat1*100 - lat2))); //cc
+    lat4 = (uint8_t)(10000*(latitude - lat1*100 - lat2 - lat3/100)); //dd
+
+    // abbcc.ddee
+    long1 = (uint8_t)(floor(longitude / 10000)); // a
+    long2 = (uint8_t)(floor(longitude - long1*10000)); //bb 
+    long3 = (uint8_t)(floor(longitude - long1*10000 - long2*100)); //cc
+    long4 = (uint8_t)(floor(100*(longitude - long1*10000 - long2*100 - long3))); //dd
+    long5 = (uint8_t)(floor(10000*(longitude - long1*10000 - long2*100 - long3 - long4/100))); //dd
+  }
+
+  uint8_t encodedPackets[] = 
+  {(uint8_t)negativeAlt, alt1, alt2, alt3, pressure1, pressure2, pressure3, temp1, temp2, lat1, lat2, lat3, lat4, long1, long2, long3, long4, long5, (uint8_t)validFix};
   
   Serial.println("encoded message to send: ");
-  for (int i = 0; i < 8; i++) {
-    Serial.print(data[i]);
+  for (int i = 0; i < 19; i++) {
+    Serial.print(encodedPackets[i]);
     Serial.print(" ");
   }
   Serial.println();
-  
-  rf95.send(data, sizeof(data));
+  return;
+  rf95.send(encodedPackets, sizeof(encodedPackets));
   rf95.waitPacketSent();
 
   uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
@@ -270,8 +302,12 @@ bool isRMC(char * sent) {
 
 // buffers to store NMEA data in case 
 // new data can't be read next loop
-char newestNMEA[128];
 char newestRMC[128];
+
+// count how many loops we haven't read new data
+// and try something else if it happens too many times
+int ignoredct = 0;
+
 void loop() {
   if (Serial && Serial.available()) {
     Serial.println("You are typing something");
@@ -324,66 +360,102 @@ void loop() {
   Serial.print("Temperature: "); Serial.println(temperature);
 
   //////////////////  GPS   //////////////////
+  // to get RMC sentence:
+  // 1. clear buffer
+  // 2. wait for gps data
+  // 3. slowly read until full sentence is formed
+  // 4. parse
+  // 5. finish or try again
 
-  bool reading = GPSSerial.available();
-  //Serial.println(reading ? "true" : "false");
-  char buff[10];
-  // for (int i = 0; i < 10; i++) {
-  //   char c = GPSSerial.read();
-  //   buff[i] = c;
-  // }
-  // Serial.println(buff);
-  
+  // allocate how many seconds to attempting to find RMC?
+  int timeoutSec = 5; // value below 5 not recommended for GPS updates at 1Hz
+  int timeoutChars = timeoutSec*200;
+
+
+  // 1.
+  Serial.println("waiting");
+  while(GPSSerial.available()) {
+    GPSSerial.read();
+  }
+  Serial.println("waiting2");
+  // 2.
+  while(!GPSSerial.available());
+  Serial.println("waiting3");
+  // 3.
   int i = 0;
+  int j = 0;
+  bool done = false;
+  // only copy found sentence to permanent buffer if it's an rmc (no timeout)
+  bool rmcValid = false;
   char sentence[128];
-  while (reading) {
-    char c = GPSSerial.read();
-    if (c == '$') {
-      i = 0;
-      // clear buffer since restarting to read
-      for (i; i < 128; i++) {
-        sentence[i] = '\0';
+  while(!done) {
+    delay(5);
+    if (GPSSerial.available()) {
+      char c = GPSSerial.read();
+      switch (c) {
+        case '$':
+          // restart message from beginning
+          j = 0;
+          for (j; j < 128; j++) {
+             sentence[j] = '\0';
+           }
+        case '*':
+          done = true;
+          rmcValid = true;
+          // 4.
+          if (!isRMC(sentence)) {
+            Serial.println();
+            Serial.print("sent: ");
+            Serial.println(sentence);
+            // 5.
+            Serial.println("is not RMC! restarting...");
+            delay(100);
+            done = false;
+            rmcValid = false;
+            j = 0;
+          }
+        default:
+          if (j < 128) {
+            sentence[j] = c;
+            j++;
+          } else {
+            Serial.println("overflow");
+            j = 0;
+          }
       }
-      sentence[0] = '$';
-      i = 1;
-    } else if (c == '*') { //  <<<<<<<<<<<  sentence is done and while loop terminates
-      //Serial.println("nmea done");
-      sentence[i] = c;
-      reading = false; //  <<<<<<<<<<<
-    } else if (i >= 128) {
-      //Serial.println("overflow");
-      // clear buffer since restarting to read
-      for (i; i < 128; i++) {
-        sentence[i] = '\0';
-      }
-      i = 0;
-    } else {
-      sentence[i] = c;
       i++;
+      if (i > timeoutChars) {
+        done = true;
+        Serial.println();
+        Serial.print("timeout reached (");
+        Serial.print(timeoutChars);
+        Serial.println(" chars)");
+      }
+    } else {
+      done = true;
+      Serial.println();
+      Serial.print("ended early at index: "); Serial.println(i);
     }
   }
-
-  if (sentence[0] == '$') { // hack to avoid keeping garbled data
-    strcpy(newestNMEA, sentence);
-    if (isRMC(newestNMEA)) { // update coordinates sentence if necessary
-      strcpy(newestRMC, newestNMEA);
-    }
+  Serial.println();
+  Serial.print("found: ");
+  Serial.println(sentence);
+  if (rmcValid) {
+    Serial.println("copying...");
+    strcpy(newestRMC, sentence);
   }
-  Serial.print("newest NMEA: ");
-  Serial.println(newestNMEA);
-  Serial.print("newest RMC: ");
-  Serial.println(newestRMC);
+  Serial.println("DONE!");
 
-  return;
+  
   //////////// Radio Transmission ////////////
 
   // handshake message
   uint8_t statusMessage[] = "Data Incoming";
   rf95.send(statusMessage, sizeof(statusMessage));
-
+  
   Serial.print("sending request... ");
   rf95.waitPacketSent();
-
+  return;
   uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
   uint8_t len = sizeof(buf);
 
