@@ -49,9 +49,6 @@ void setup() {
     transmitData();
   } else {
     gpsInit();
-    parseAndStore();
-    reboot();
-    Serial.println("you won't read this");
   }
 }
 
@@ -60,7 +57,8 @@ void loop() {
     // this will terminate with a reboot once data is successfully transmitted
     transmitData();
   } else {
-    delay(100);
+    // this too
+    parseAndStore();
   }
 }
 
@@ -142,7 +140,7 @@ void flashInit() {
   csvFile = fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT | O_TRUNC);
   if (csvFile) {
     csvFile.println("sensor data: ");
-    csvFile.println("\"altitude\",\"pressure (hPa)\",\"temperature\"");
+    csvFile.println("\"date\",\"time\",\"altitude (m)\",\"pressure (hPa)\",\"temperature (°C)\",\"longitude (°)\",\"latitude (°)\",\"fix valid\"");
     Serial.println("data file first line written");
   } else {
     Serial.println("failed to start write to data file!");
@@ -254,27 +252,73 @@ void transmitData() {
   if (!altitude || !pressure || !temperature) {
     Serial.println("data measurement failure");
   }
-  float dataPacket[] = {altitude, pressure, temperature};
 
-  csvFile = fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT);
+  // recover and parse gps
+  float longitude; // decimal degrees
+  float latitude; // decimal degrees
+  bool validFix;
+  int time; // in format 123456 HHMMSS
+  int date; // in format 123456 MMDDYY
 
-  if (csvFile) {
-    csvFile.print(altitude);
-    csvFile.print(",");
-    csvFile.print(pressure);
-    csvFile.print(",");
-    csvFile.println(temperature);
+  configFile = fatfs.open(CONFIG_FILE, FILE_READ);
+  if (!configFile) {
+    Serial.println("error, failed to read gps data file");
   } else {
-    Serial.println("failed to write data to file");
+    // parse raw nmea sentence
+    char rmcSentence[128];
+    configFile.readBytes(rmcSentence, sizeof(rmcSentence));
+    Serial.println("to decode:");
+    Serial.println(rmcSentence);
+    rmcDecode(rmcSentence, sizeof(rmcSentence), &longitude, &latitude, &validFix, &time, &date); // extract data and put into variables
+    Serial.print("parsed longitude: "); Serial.println(longitude, 4);
+    Serial.print("parsed latitude: "); Serial.println(latitude, 4);
+    Serial.print("parsed fix status: "); Serial.println(validFix ? "valid" : "invalid");
+    Serial.print("time: "); 
+    Serial.print((int)floor(time/10000)); Serial.print(':');
+    Serial.print((int)floor(time % 10000 /100)); Serial.print(':'); 
+    Serial.println(time % 100);
+    Serial.print("date: "); 
+    Serial.print((int)floor(date % 10000 /100)); Serial.print('/'); 
+    Serial.print((int)floor(date/10000)); Serial.print('/');
+    Serial.println(date % 100);
   }
-  csvFile.close();
+  configFile.close();
+
   Serial.print("Altitude: "); Serial.println(altitude);
   Serial.print("Pressure: "); Serial.println(pressure);
   Serial.print("Temperature: "); Serial.println(temperature);
 
+  csvFile = fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT);
+  // record data to local file
+  if (csvFile) {
+    csvFile.print("\"");
+    csvFile.print((int)floor(date % 10000 /100)); csvFile.print('/'); 
+    csvFile.print((int)floor(date/10000)); csvFile.print('/');
+    csvFile.print(date % 100);
+    csvFile.print("\",\"");
+    csvFile.print((int)floor(time/10000)); csvFile.print(':');
+    csvFile.print((int)floor(time % 10000 /100)); csvFile.print(':'); 
+    csvFile.print(time % 100);
+    csvFile.print("\","); 
+    csvFile.print(altitude);
+    csvFile.print(",");
+    csvFile.print(pressure);
+    csvFile.print(",");
+    csvFile.print(temperature);
+    csvFile.print(",");
+    csvFile.print(longitude);
+    csvFile.print(",");
+    csvFile.print(latitude);
+    csvFile.print(",");
+    csvFile.println(validFix);
+  } else {
+    Serial.println("failed to write data to file");
+  }
+  csvFile.close();
+
+
   uint8_t statusMessage[] = "Data Incoming";
   rf95.send(statusMessage, sizeof(statusMessage));
-
   Serial.print("sending request... ");
   rf95.waitPacketSent();
 
@@ -285,6 +329,7 @@ void transmitData() {
     if (rf95.recv(buf, &len)) {
       if (!strcmp((char *)buf, "ready for data")) {
           Serial.println("handshake complete");
+          float dataPacket[] = {altitude, pressure, temperature, longitude, latitude, (float)validFix, (float)time, (float)date};
           sendAndWait(dataPacket);
         }
       else {
@@ -302,38 +347,81 @@ void transmitData() {
 }
 
 //xxxx.xx,yyyy.yy,zz.zz
-void sendAndWait(float bmpData[3]) {
+void sendAndWait(float dataSet[8]) {
   // xxyy.zz
-  float data1 = bmpData[0]; //float
-  float data2 = bmpData[1];
-  float data3 = bmpData[2];
+  float alt = dataSet[0];
+  float pressure = dataSet[1];
+  float temp = dataSet[2];
+  bool negativeAlt = alt < 0;
+  float latitude = dataSet[3];
+  float longitude = dataSet[4];
+  bool validFix = (bool)(int)dataSet[5];
+  int time = dataSet[6];
+  int date = dataSet[7];
 
   // each float needs to be broken up into integer sections: 1234.56 -> [12], [34], [56]
-  
+
+  // since we already know if alt is negative, take abs to get pure digits and avoid negative overflow on unsigned int
+  alt = fabs(alt);
+
   // xxyy.zz
-  uint8_t num1pt1 = (uint8_t)(floor(data1 / 100)); //xx
-  uint8_t num1pt2 = (uint8_t)(floor(data1 - num1pt1*100)); //yy  
-  uint8_t num1pt3 = (uint8_t)(100*(data1 - num1pt1*100 - num1pt2)); //zz
+  uint8_t alt1 = (uint8_t)(floor(alt / 100)); //xx
+  uint8_t alt2 = (uint8_t)(floor(alt - alt1*100)); //yy  
+  uint8_t alt3 = (uint8_t)(100*(alt - alt1*100 - alt2)); //zz
 
   //xxyy.zz
-  uint8_t num2pt1 = (uint8_t)(floor(data2 / 100)); //xx
-  uint8_t num2pt2 = (uint8_t)(floor(data2 - num2pt1*100)); //yy  
-  uint8_t num2pt3 = (uint8_t)(100*(data2 - num2pt1*100 - num2pt2)); //zz
+  uint8_t pressure1 = (uint8_t)(floor(pressure / 100)); //xx
+  uint8_t pressure2 = (uint8_t)(floor(pressure - pressure1*100)); //yy  
+  uint8_t pressure3 = (uint8_t)(100*(pressure - pressure1*100 - pressure2)); //zz
   
+  //xx.yy
+  uint8_t temp1 = (uint8_t)(floor(temp)); //xx
+  uint8_t temp2 = (uint8_t)((temp - temp1)*100); //yy
 
-  uint8_t num3pt1 = (uint8_t)(floor(data3)); //xx
-  uint8_t num3pt2 = (uint8_t)((data3 - num3pt1)*100); //yy
+  uint8_t long1;
+  uint8_t long2;
+  uint8_t long3;
 
-  uint8_t data[] = {num1pt1, num1pt2, num1pt3, num2pt1, num2pt2, num2pt3, num3pt1, num3pt2};
+  uint8_t lat1;
+  uint8_t lat2;
+  uint8_t lat3;
+  uint8_t lat4;
+
+  if (validFix) {
+    // aa.bbcc
+    long1 = (uint8_t)(floor(longitude)); //aa 
+    long2 = (uint8_t)(floor(100*(longitude - long1))); //bb
+    long3 = (uint8_t)((int)(10000*longitude) % 100); //cc
+
+    // abb.ccdd
+    lat1 = (uint8_t)floor(latitude/100); //a
+    lat1 = (uint8_t)(floor(latitude - lat1)); //bb
+    lat2 = (uint8_t)(floor(100*(latitude - lat1 - lat2))); //cc
+    lat3 = (uint8_t)((int)(10000*latitude) % 100); //dd
+  }
+
+  // xxyyzz
+  uint8_t hour = floor(time/10000);
+  uint8_t min = floor(time % 10000 /100);
+  uint8_t sec = time % 100;
+  // xxyyzz
+  uint8_t day = floor(date/10000);
+  uint8_t month = floor(date % 10000 /100);
+  uint8_t year = date % 100;
+
+  uint8_t encodedPackets[] = 
+  {(uint8_t)negativeAlt, alt1, alt2, alt3, pressure1, pressure2, pressure3, temp1, temp2, 
+  long1, long2, long3, lat1, lat2, lat3, lat4, (uint8_t)validFix,
+  hour, min, sec, month, day, year};
   
   Serial.println("encoded message to send: ");
-  for (int i = 0; i < 8; i++) {
-    Serial.print(data[i]);
+  for (int i = 0; i < sizeof(encodedPackets); i++) {
+    Serial.print(encodedPackets[i]);
     Serial.print(" ");
   }
   Serial.println();
   
-  rf95.send(data, sizeof(data));
+  rf95.send(encodedPackets, sizeof(encodedPackets));
   rf95.waitPacketSent();
 
   uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
@@ -358,9 +446,174 @@ void sendAndWait(float bmpData[3]) {
   }
 }
 
+// parse fields from rmc message and copy into given buffer variables
+void rmcDecode(char* source, size_t srcLen, float *longit, float *lat, bool *validFix, int *time, int *date) {
+  /*
+  example message:
+  $GPRMC,123519,A,4807.038,N,01131.000,E,0.022,269.131,230394,,,A,C*
+  name   time  fix   long      lat      speed  sat angle date        always ends with *
+  */
+
+  Serial.println("source");
+  Serial.println(source);
+  char* fields[10]; // only concerned with first 10 fields
+  int field = 0;
+  int letter = 0;
+  char temp[10];
+  int i = 0;
+  for (i; i<srcLen;i++) {
+    if (source[i] == ',' || letter >= 10) {
+      if (field < 10) {
+        // store string of field efficiently
+        char* fieldptr = (char*) calloc(sizeof(temp) + 1, sizeof(char));
+        strcpy(fieldptr, temp);
+        fields[field] = fieldptr;
+        Serial.println();
+        Serial.print("set field "); Serial.println(field);
+        Serial.println(fields[field]);
+      }
+      Serial.print(" (");
+      Serial.print(temp);
+      Serial.print(") ");
+      Serial.print(field);
+      Serial.println();
+      field++;
+      letter = 0;
+      memset(temp, 0, 10 * sizeof(char)); // clear buffer
+      continue;
+    }
+    Serial.print(source[i]);
+    temp[letter] = source[i];
+    letter++;
+  }
+  Serial.print("last idx: "); Serial.println(i);
+  for (int p = 0; p < 10; p++) {
+    Serial.println(fields[p]);
+  }
+  
+  // parse: 
+
+  // time+date
+  *time = atoi(fields[1]);
+  *date = atoi(fields[9]);
+  Serial.println(*time);
+  Serial.println(*date);
+  
+
+  // position data
+  float longitBuf = (float)atof(fields[3]);
+  *longit = (float)floor(longitBuf/100.0) + fmodf(longitBuf, 100.0)/60; // DDMM.MMM --> DD.DDDD
+  if (fields[4][0] == 'S') { // south
+    *longit = *longit * -1;
+  }
+
+  float latBuf = (float)atof(fields[5]);
+  *lat = (float)floor(latBuf/100.0) + fmodf(latBuf, 100.0)/60; // DDDMM.MMM --> DDD.DDDD
+  if (fields[6][0] == 'W') { // west
+    *lat = *lat * -1;
+  }
+
+  *validFix = (fields[2][0] == 'A');
+  for (int p = 0; p < 10; p++) {
+    free(&fields[p]);
+  }
+}
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~ GPS LOOP ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// to get RMC sentence:
+// 1. clear buffer
+// 2. wait for gps data
+// 3. slowly read until full sentence is formed
+// 4. parse
+// 5. finish or try again
+
+// checks if NMEA sentence is RMC (Recommended Minimum Coordinates) aka GPS data
+bool isRMC(char * sent) {
+  char msgType[6];
+  for (int i = 0; i < 6; i++) {
+    msgType[i] = sent[i];
+  }
+  return !strcmp(msgType, "$GNRMC");
+}
+
 void parseAndStore() {
-  Serial.println("read gps serial here");
-  configFile = fatfs.open(CONFIG_FILE, FILE_WRITE | O_CREAT);
-  configFile.close();
+  
+  // allocate how many seconds to attempting to find RMC?
+  int timeoutSec = 5; // value below 5 not recommended for GPS updates at 1Hz
+  int timeoutChars = timeoutSec*9600/5;
+
+
+  // 1.
+  while(GPSSerial.available()) {
+    GPSSerial.read();
+  }
+
+  // 2.
+  while(!GPSSerial.available());
+  // 3.
+  int i = 0;
+  int j = 0;
+  bool done = false;
+  // only copy found sentence to permanent buffer if it's an rmc (no timeout)
+  bool rmcValid = false;
+  char sentence[128];
+  Serial.println("begin gps parse");
+  while(!done) {
+    delay(5);
+    if (GPSSerial.available()) {
+      char c = GPSSerial.read();
+      switch (c) {
+        case '$':
+          // restart message from beginning
+          j = 0;
+          for (j; j < 128; j++) {
+             sentence[j] = '\0';
+           }
+        case '*':
+          done = true;
+          rmcValid = true;
+          // 4.
+          if (!isRMC(sentence)) {
+            // continue to read from serial
+            delay(25);
+            done = false;
+            rmcValid = false;
+            j = 0;
+          }
+        default:
+          if (j < 128) {
+            sentence[j] = c;
+            j++;
+          } else {
+            Serial.println("overflow");
+            j = 0;
+          }
+      }
+      i++;
+      if (i > timeoutChars) {
+        done = true;
+        Serial.println();
+        Serial.print("search timeout reached (");
+        Serial.print(timeoutChars);
+        Serial.println(") chars");
+      }
+    } else {
+      done = true;
+      Serial.println();
+      Serial.print("ended early at index: "); Serial.println(i);
+    }
+  }
+  
+  if (rmcValid) {
+    Serial.println();
+    Serial.print("found: ");
+    Serial.println(sentence);
+    configFile = fatfs.open(CONFIG_FILE, FILE_WRITE | O_CREAT);
+    configFile.write(sentence);
+    configFile.close();
+    reboot();
+  }
+  Serial.println("DONE!");
+  delay(500);
+  
 }
