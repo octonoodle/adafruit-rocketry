@@ -32,9 +32,21 @@ void SERCOM4_Handler() { GPSSerial.IrqHandler(); }
 #define RF95_FREQ 915.0
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
-float SEALEVELPRESSURE_HPA = 1001.01657;
 Adafruit_BMP3XX bmp;
 Adafruit_NeoPixel rgb(1, 8);  //for status updates during testing
+
+/*          PROGRAM OPTIONS          */
+float SEALEVELPRESSURE_HPA = 1019.6; 
+#define USE_TEST_MESSAGE false // still read gps serial, but parse and transmit test message instead
+#define VERBOSE_MODE false // describe code execution in detail, good for isolating crash points
+#define WAIT_FOR_SERIAL false // do not start the code unless the serial port is connected (computer)
+
+
+void verboseMessage(const char* msg) {
+  #if VERBOSE_MODE
+  Serial.println(msg);
+  #endif
+}
 
 // important flag: this controls whether the chip is running
 // in radio transmit mode (1) or gps data collection mode (0)
@@ -64,6 +76,7 @@ void loop() {
 
 // reboot the chip (same as pressing RST button)
 void reboot() {
+  Serial.println();
   Serial.println("REBOOTING...");
   delay(50);
   __disable_irq();
@@ -76,7 +89,9 @@ void reboot() {
 // ~~~~~~~~~~~~ SETUP ~~~~~~~~~~~~~~
 void serialInit() {
   Serial.begin(115200);
-  while (!Serial) delay(1);
+  if (WAIT_FOR_SERIAL) {
+    while (!Serial) delay(1);
+  }
   delay(100);
   for (int i = 0; i < 20; i++) {
     Serial.print("/");
@@ -135,13 +150,27 @@ void flashInit() {
       ;
   }
   Serial.println("mounted filesystem");
+  File32 eraseFlag = fatfs.open("noErase.txt", FILE_WRITE);
+  bool truncate = false;
+  if (!eraseFlag) {
+    truncate = true;
+    eraseFlag = fatfs.open("noErase.txt", FILE_WRITE | O_CREAT);
+  }
+  eraseFlag.close();
 
   Serial.print("formatting csv for data recording... ");
-  csvFile = fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT | O_TRUNC);
+  csvFile = 
+  truncate ? 
+  fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT | O_TRUNC) :
+  fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT);
   if (csvFile) {
-    csvFile.println("sensor data: ");
-    csvFile.println("\"date\",\"time\",\"altitude (m)\",\"pressure (hPa)\",\"temperature (°C)\",\"longitude (°)\",\"latitude (°)\",\"fix valid\"");
-    Serial.println("data file first line written");
+    if (truncate) {
+      csvFile.println("sensor data: ");
+      csvFile.println("\"date\",\"time\",\"altitude (m)\",\"pressure (hPa)\",\"temperature (°C)\",\"longitude (°)\",\"latitude (°)\",\"fix valid\"");
+      Serial.println("data file first line written");
+    } else {
+      Serial.println("did not print first line");
+    }
   } else {
     Serial.println("failed to start write to data file!");
     while (1);
@@ -196,9 +225,9 @@ void rf95Init() {
  // }
   //int power;
   //power = atoi(num);
-  rf95.setTxPower(10, false);
+  rf95.setTxPower(23, false);
   Serial.print("power set to ");
-  Serial.print(10);
+  Serial.print(23);
   Serial.println(" dBm");
 
   Serial.println("Radio configured");
@@ -238,20 +267,23 @@ void transmitData() {
       Serial.println("input ignored");
     }
   }
+  verboseMessage("kill check");
 
   if (!bmp.performReading()) {
     Serial.println("reading error");
     delay(10);
     return;
   }
+  verboseMessage("bmp read");
 
   // collect data from BMP390 sensor array
   float altitude = bmp.readAltitude(SEALEVELPRESSURE_HPA);
   float pressure = bmp.pressure / 100.0;
   float temperature = bmp.temperature;
   if (!altitude || !pressure || !temperature) {
-    Serial.println("data measurement failure");
+    Serial.println("data measurement failure!");
   }
+  verboseMessage("bmp valid");
 
   // recover and parse gps
   float longitude; // decimal degrees
@@ -261,28 +293,49 @@ void transmitData() {
   int date; // in format 123456 MMDDYY
 
   configFile = fatfs.open(CONFIG_FILE, FILE_READ);
+  verboseMessage("opened config");
+
   if (!configFile) {
     Serial.println("error, failed to read gps data file");
   } else {
     // parse raw nmea sentence
     char rmcSentence[128];
-    configFile.readBytes(rmcSentence, sizeof(rmcSentence));
-    Serial.println("to decode:");
-    Serial.println(rmcSentence);
+    if (USE_TEST_MESSAGE) {
+      strcpy(rmcSentence, "$GPRMC,123519,A,4807.038,N,01131.000,E,0.022,269.131,230394,,,A,C*");
+      verboseMessage("gps input replaced by test message");
+    } else {
+      configFile.readBytes(rmcSentence, sizeof(rmcSentence));
+      verboseMessage("rmc get");
+    }
     rmcDecode(rmcSentence, sizeof(rmcSentence), &longitude, &latitude, &validFix, &time, &date); // extract data and put into variables
-    Serial.print("parsed longitude: "); Serial.println(longitude, 4);
-    Serial.print("parsed latitude: "); Serial.println(latitude, 4);
-    Serial.print("parsed fix status: "); Serial.println(validFix ? "valid" : "invalid");
-    Serial.print("time: "); 
-    Serial.print((int)floor(time/10000)); Serial.print(':');
-    Serial.print((int)floor(time % 10000 /100)); Serial.print(':'); 
-    Serial.println(time % 100);
-    Serial.print("date: "); 
-    Serial.print((int)floor(date % 10000 /100)); Serial.print('/'); 
-    Serial.print((int)floor(date/10000)); Serial.print('/');
-    Serial.println(date % 100);
+    verboseMessage("rmc decoded:");
+    // print everything in one line
+    // timing
+    char foo[10];
+    sprintf(foo, "%f", longitude);
+    verboseMessage(foo);
+    sprintf(foo, "%f", latitude);
+    verboseMessage(foo);
+    Serial.println(validFix);
+    Serial.println(time);
+    Serial.println(date);
+    short month = floor(date % 10000 /100); 
+    short day = floor(date/10000);
+    short year = date % 100;
+    short hour = floor(time/10000); 
+    short min = floor(time % 10000 /100); 
+    short sec = time % 100;
+    char timedate[17];
+    addZerosPrint(month); Serial.print("/"); addZerosPrint(day); Serial.print("/"); addZerosPrint(year); Serial.print(" ");
+    addZerosPrint(hour); Serial.print(":"); addZerosPrint(min); Serial.print(":"); addZerosPrint(sec);
+
+    // posn
+    Serial.print(" long: "); Serial.print(longitude, 4);
+    Serial.print(" lat: "); Serial.print(latitude, 4);
+    Serial.print(" fix: "); Serial.println(validFix ? "valid" : "invalid");
   }
-  configFile.close();
+  verboseMessage("config closed "); 
+  verboseMessage(configFile.close() ? "1" : "0");
 
   Serial.print("Altitude: "); Serial.println(altitude);
   Serial.print("Pressure: "); Serial.println(pressure);
@@ -292,13 +345,13 @@ void transmitData() {
   // record data to local file
   if (csvFile) {
     csvFile.print("\"");
-    csvFile.print((int)floor(date % 10000 /100)); csvFile.print('/'); 
-    csvFile.print((int)floor(date/10000)); csvFile.print('/');
-    csvFile.print(date % 100);
+    addZerosPrintToFile((int)floor(date % 10000 /100)); csvFile.print('/'); 
+    addZerosPrintToFile((int)floor(date/10000)); csvFile.print('/');
+    addZerosPrintToFile(date % 100);
     csvFile.print("\",\"");
-    csvFile.print((int)floor(time/10000)); csvFile.print(':');
-    csvFile.print((int)floor(time % 10000 /100)); csvFile.print(':'); 
-    csvFile.print(time % 100);
+    addZerosPrintToFile((int)floor(time/10000)); csvFile.print(':');
+    addZerosPrintToFile((int)floor(time % 10000 /100)); csvFile.print(':'); 
+    addZerosPrintToFile((int)(time % 100));
     csvFile.print("\","); 
     csvFile.print(altitude);
     csvFile.print(",");
@@ -306,9 +359,9 @@ void transmitData() {
     csvFile.print(",");
     csvFile.print(temperature);
     csvFile.print(",");
-    csvFile.print(longitude);
+    csvFile.print(longitude, 4);
     csvFile.print(",");
-    csvFile.print(latitude);
+    csvFile.print(latitude, 4);
     csvFile.print(",");
     csvFile.println(validFix);
   } else {
@@ -317,7 +370,7 @@ void transmitData() {
   csvFile.close();
 
 
-  uint8_t statusMessage[] = "Data Incoming";
+  uint8_t statusMessage[] = "data incoming";
   rf95.send(statusMessage, sizeof(statusMessage));
   Serial.print("sending request... ");
   rf95.waitPacketSent();
@@ -352,17 +405,21 @@ void sendAndWait(float dataSet[8]) {
   float alt = dataSet[0];
   float pressure = dataSet[1];
   float temp = dataSet[2];
-  bool negativeAlt = alt < 0;
-  float latitude = dataSet[3];
-  float longitude = dataSet[4];
+  float longitude = dataSet[3];
+  float latitude = dataSet[4];
   bool validFix = (bool)(int)dataSet[5];
   int time = dataSet[6];
   int date = dataSet[7];
+  bool negativeAlt = alt < 0;
+  bool negativeLong = longitude < 0;
+  bool negativeLat = latitude < 0;
 
   // each float needs to be broken up into integer sections: 1234.56 -> [12], [34], [56]
 
-  // since we already know if alt is negative, take abs to get pure digits and avoid negative overflow on unsigned int
+  // since we already know if values are negative, take abs to get pure digits and avoid negative overflow on unsigned ints
   alt = fabs(alt);
+  longitude = fabs(longitude);
+  latitude = fabs(latitude);
 
   // xxyy.zz
   uint8_t alt1 = (uint8_t)(floor(alt / 100)); //xx
@@ -395,9 +452,9 @@ void sendAndWait(float dataSet[8]) {
 
     // abb.ccdd
     lat1 = (uint8_t)floor(latitude/100); //a
-    lat1 = (uint8_t)(floor(latitude - lat1)); //bb
-    lat2 = (uint8_t)(floor(100*(latitude - lat1 - lat2))); //cc
-    lat3 = (uint8_t)((int)(10000*latitude) % 100); //dd
+    lat2 = (uint8_t)(floor(latitude - lat1*100)); //bb
+    lat3 = (uint8_t)(floor(100*(latitude - lat1*100 - lat2))); //cc
+    lat4 = (uint8_t)((int)(10000*latitude) % 100); //dd
   }
 
   // xxyyzz
@@ -409,17 +466,28 @@ void sendAndWait(float dataSet[8]) {
   uint8_t month = floor(date % 10000 /100);
   uint8_t year = date % 100;
 
+  // alt: -220.29
+  // press: 1027.43
+  // temp: 28.74
+  // $GPRMC,123519,A,4807.038,N,01131.000,E,0.022,269.131,230394,,,A,C*
+  //alt long lat
+  //+/- +/- +/-    alt       press    temp      long        lat      fix    time      date     end
+  // 1 | 0 | 0 | 2 20 29 | 10 27 43 | 28 73 | 48 11 73 | 0 11 51 66 | 1 | 12 35 19 | 3 23 94 | 0
+
   uint8_t encodedPackets[] = 
-  {(uint8_t)negativeAlt, alt1, alt2, alt3, pressure1, pressure2, pressure3, temp1, temp2, 
+  {(uint8_t)negativeAlt, (uint8_t)negativeLong, (uint8_t)negativeLat, alt1, alt2, alt3, pressure1, pressure2, pressure3, temp1, temp2, 
   long1, long2, long3, lat1, lat2, lat3, lat4, (uint8_t)validFix,
-  hour, min, sec, month, day, year};
+  hour, min, sec, month, day, year, 0};
   
-  Serial.println("encoded message to send: ");
+  Serial.print("encoded message to send (");
+  Serial.print(sizeof(encodedPackets));
+  Serial.println(" bytes): ");
   for (int i = 0; i < sizeof(encodedPackets); i++) {
     Serial.print(encodedPackets[i]);
     Serial.print(" ");
   }
   Serial.println();
+  
   
   rf95.send(encodedPackets, sizeof(encodedPackets));
   rf95.waitPacketSent();
@@ -454,50 +522,47 @@ void rmcDecode(char* source, size_t srcLen, float *longit, float *lat, bool *val
   name   time  fix   long      lat      speed  sat angle date        always ends with *
   */
 
-  Serial.println("source");
-  Serial.println(source);
-  char* fields[10]; // only concerned with first 10 fields
+  verboseMessage("before decode");
+  char fields[10][10]; // only concerned with first 10 fields
   int field = 0;
   int letter = 0;
   char temp[10];
   int i = 0;
   for (i; i<srcLen;i++) {
+    #if VERBOSE_MODE
+    Serial.print('_');
+    Serial.print(source[i]);
+    #endif
+
     if (source[i] == ',' || letter >= 10) {
       if (field < 10) {
         // store string of field efficiently
-        char* fieldptr = (char*) calloc(sizeof(temp) + 1, sizeof(char));
-        strcpy(fieldptr, temp);
-        fields[field] = fieldptr;
-        Serial.println();
-        Serial.print("set field "); Serial.println(field);
-        Serial.println(fields[field]);
+        size_t len = strlen(temp);
+        #if VERBOSE_MODE
+        Serial.print("  ["); Serial.print(len); Serial.println("]");
+        #endif
+        // char anonField[len];
+        // strcpy(anonField, temp);
+        // verboseMessage(anonField);
+        strcpy(fields[field], temp);
+        field++;
+        letter = 0;
+        memset(temp, 0, 10 * sizeof(char)); // clear buffer
+        continue;
+      } else {
+        break;
       }
-      Serial.print(" (");
-      Serial.print(temp);
-      Serial.print(") ");
-      Serial.print(field);
-      Serial.println();
-      field++;
-      letter = 0;
-      memset(temp, 0, 10 * sizeof(char)); // clear buffer
-      continue;
     }
-    Serial.print(source[i]);
     temp[letter] = source[i];
     letter++;
   }
-  Serial.print("last idx: "); Serial.println(i);
-  for (int p = 0; p < 10; p++) {
-    Serial.println(fields[p]);
-  }
+  verboseMessage("field parse");
   
   // parse: 
 
   // time+date
   *time = atoi(fields[1]);
   *date = atoi(fields[9]);
-  Serial.println(*time);
-  Serial.println(*date);
   
 
   // position data
@@ -512,13 +577,23 @@ void rmcDecode(char* source, size_t srcLen, float *longit, float *lat, bool *val
   if (fields[6][0] == 'W') { // west
     *lat = *lat * -1;
   }
-
   *validFix = (fields[2][0] == 'A');
-  for (int p = 0; p < 10; p++) {
-    free(&fields[p]);
-  }
 }
 
+// normalize nums like "9" and "4" to "09", "04", etc. (for time+date)
+void addZerosPrint(int num) {
+  if (abs(num) < 10) {
+    Serial.print("0");
+  } 
+  Serial.print(num);
+}
+
+void addZerosPrintToFile(int num) {
+  if (abs(num) < 10) {
+    csvFile.print("0");
+  } 
+  csvFile.print(num);
+}
 // ~~~~~~~~~~~~~~~~~~~~~~~~ GPS LOOP ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // to get RMC sentence:
 // 1. clear buffer
@@ -539,17 +614,27 @@ bool isRMC(char * sent) {
 void parseAndStore() {
   
   // allocate how many seconds to attempting to find RMC?
-  int timeoutSec = 5; // value below 5 not recommended for GPS updates at 1Hz
-  int timeoutChars = timeoutSec*9600/5;
+  int timeoutSec = 3; // value below 5 not recommended for GPS updates at 1Hz
+  int timeoutChars = timeoutSec*960/5;
 
-
+  verboseMessage("start parse method");
+  delay(10);
   // 1.
   while(GPSSerial.available()) {
     GPSSerial.read();
   }
+  verboseMessage("cleared buffer");
 
   // 2.
-  while(!GPSSerial.available());
+  int countdown = 2000;
+  while(!GPSSerial.available()) {
+    delay(1);
+    countdown--;
+    if (countdown < 0) {
+      Serial.println("no signal from gps, are you sure GPS TX is connected to pin A2?");
+      reboot();
+    }
+  }
   // 3.
   int i = 0;
   int j = 0;
@@ -557,7 +642,7 @@ void parseAndStore() {
   // only copy found sentence to permanent buffer if it's an rmc (no timeout)
   bool rmcValid = false;
   char sentence[128];
-  Serial.println("begin gps parse");
+  verboseMessage("begin gps parse");
   while(!done) {
     delay(5);
     if (GPSSerial.available()) {
@@ -608,6 +693,7 @@ void parseAndStore() {
     Serial.println();
     Serial.print("found: ");
     Serial.println(sentence);
+    // write new gps data to file for radio to transmit
     configFile = fatfs.open(CONFIG_FILE, FILE_WRITE | O_CREAT);
     configFile.write(sentence);
     configFile.close();
