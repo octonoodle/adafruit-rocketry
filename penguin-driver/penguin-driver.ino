@@ -40,11 +40,26 @@ float SEALEVELPRESSURE_HPA = 1019.6;
 #define USE_TEST_MESSAGE false // still read gps serial, but parse and transmit test message instead
 #define VERBOSE_MODE false // describe code execution in detail, good for isolating crash points
 #define WAIT_FOR_SERIAL false // do not start the code unless the serial port is connected (computer)
-
+#define TOGGLE_ALL_MESSAGES false // if disabled, do not print any messages to Serial. used to increase speed.
 
 void verboseMessage(const char* msg) {
   #if VERBOSE_MODE
   Serial.println(msg);
+  #endif
+}
+
+void fastPrintln(const char* msg) {
+  #if TOGGLE_ALL_MESSAGES
+  Serial.println(msg);
+  #endif
+}
+void fastPrintln() {
+  fastPrintln("");
+}
+
+void fastPrint(const char* msg) {
+  #if TOGGLE_ALL_MESSAGES
+  Serial.print(msg);
   #endif
 }
 
@@ -76,8 +91,8 @@ void loop() {
 
 // reboot the chip (same as pressing RST button)
 void reboot() {
-  Serial.println();
-  Serial.println("REBOOTING...");
+  fastPrintln();
+  fastPrintln("REBOOTING...");
   delay(50);
   __disable_irq();
   NVIC_SystemReset();
@@ -94,62 +109,62 @@ void serialInit() {
   }
   delay(100);
   for (int i = 0; i < 20; i++) {
-    Serial.print("/");
+    fastPrint("/");
   }
-  Serial.print("\n\n");
-  Serial.println("Welcome to CAI Rocketry Software");
-  Serial.println("Driver for Penguin-class electronics payload");
+  fastPrint("\n\n");
+  fastPrintln("Welcome to CAI Rocketry Software");
+  fastPrintln("Driver for Penguin-class electronics payload");
   delay(500);
-  Serial.println();
+  fastPrintln();
   for (int i = 0; i < 20; i++) {
-    Serial.print("/");
+    fastPrint("/");
   }
-  Serial.print("\n\n");
+  fastPrint("\n\n");
 }
 void bmpInit() {
-  Serial.println("Initializing Barometer/Altimiter/Thermometer...");
+  fastPrintln("Initializing Barometer/Altimiter/Thermometer...");
 
   String input;
   input = "D";
-  // Serial.println("use default sea level definition or set at current pressure? d/c");
+  // fastPrintln("use default sea level definition or set at current pressure? d/c");
   // while (!Serial.available()) {
   //   delay(10);
   // }
   // input = Serial.readString();
   if (bmp.begin_I2C()) {
-    Serial.println("valid BMP3 sensor found");
+    fastPrintln("valid BMP3 sensor found");
     if (input.equals("c")) {
-      Serial.print("setting to sensor value... ");
+      fastPrint("setting to sensor value... ");
       delay(10);
       if (!bmp.performReading()) {
-        Serial.println("failed");
+        fastPrintln("failed");
       } else {
         SEALEVELPRESSURE_HPA = (bmp.pressure);
-        Serial.println("success");
+        fastPrintln("success");
       }
     }
   } else {
-    Serial.println("Could not find a valid BMP3 sensor, check wiring!");
+    fastPrintln("Could not find a valid BMP3 sensor, check wiring!");
     while (1);
   }
 }
 void flashInit() {
-  Serial.print("Configuring flash memory... ");
+  fastPrint("Configuring flash memory... ");
   if (!flash.begin()) {
-    Serial.println("failed");
+    fastPrintln("failed");
     while (1);
   }
-  Serial.println("success");
+  fastPrintln("success");
 
   // First call begin to mount the filesystem.  Check that it returns true
   // to make sure the filesystem was mounted.
   if (!fatfs.begin(&flash)) {
-    Serial.println("Error, failed to mount newly formatted filesystem");
-    Serial.println("Was the flash chip formatted with the fatfs_format example?");
+    fastPrintln("Error, failed to mount newly formatted filesystem");
+    fastPrintln("Was the flash chip formatted with the fatfs_format example?");
     while (1)
       ;
   }
-  Serial.println("mounted filesystem");
+  fastPrintln("mounted filesystem");
   File32 eraseFlag = fatfs.open("noErase.txt", FILE_WRITE);
   bool truncate = false;
   if (!eraseFlag) {
@@ -158,7 +173,7 @@ void flashInit() {
   }
   eraseFlag.close();
 
-  Serial.print("formatting csv for data recording... ");
+  fastPrint("formatting csv for data recording... ");
   csvFile = 
   truncate ? 
   fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT | O_TRUNC) :
@@ -167,31 +182,31 @@ void flashInit() {
     if (truncate) {
       csvFile.println("sensor data: ");
       csvFile.println("\"date\",\"time\",\"altitude (m)\",\"pressure (hPa)\",\"temperature (°C)\",\"longitude (°)\",\"latitude (°)\",\"fix valid\"");
-      Serial.println("data file first line written");
+      fastPrintln("data file first line written");
     } else {
-      Serial.println("did not print first line");
+      fastPrintln("did not print first line");
     }
   } else {
-    Serial.println("failed to start write to data file!");
+    fastPrintln("failed to start write to data file!");
     while (1);
   }
   csvFile.close();
 
-  Serial.print("config file... ");
+  fastPrint("config file... ");
   configFile  = fatfs.open(CONFIG_FILE, FILE_READ);
   if (configFile) {
     TRANSMIT_MODE = true;
-    Serial.println("found");
-    Serial.println("Starting in Radio Mode");
+    fastPrintln("found");
+    fastPrintln("Starting in Radio Mode");
   } else {
     TRANSMIT_MODE = false;
-    Serial.println("missing");
-    Serial.println("Starting in GPS Mode");
+    fastPrintln("missing");
+    fastPrintln("Starting in GPS Mode");
   }
   configFile.close();
 }
 void rf95Init() {
-  Serial.print("Radio Client Initializing...");
+  fastPrint("Radio Client Initializing...");
   pinMode(RFM95_RST, OUTPUT);
   digitalWrite(RFM95_RST, HIGH);
   
@@ -202,17 +217,19 @@ void rf95Init() {
   delay(10);
 
   if (!rf95.init()) {
-    Serial.println("failed");
+    fastPrintln("failed");
     while (1);
   }
-  Serial.println("success");
+  fastPrintln("success");
 
   rf95.setFrequency(RF95_FREQ);
+  #if TOGGLE_ALL_MESSAGES
   Serial.print("frequency setting: ");
   Serial.print(RF95_FREQ);
   Serial.println("MHz");
+  #endif
 
-  //Serial.println("enter power setting [5-23]:");
+  //fastPrintln("enter power setting [5-23]:");
   //while (!Serial.available())
   //  ;
   //int i = 0;
@@ -226,14 +243,16 @@ void rf95Init() {
   //int power;
   //power = atoi(num);
   rf95.setTxPower(23, false);
-  Serial.print("power set to ");
-  Serial.print(23);
-  Serial.println(" dBm");
+  fastPrint("power set to ");
+  char dbm[2];
+  sprintf(dbm, "%d", 42);
+  fastPrint(dbm);
+  fastPrintln(" dBm");
 
-  Serial.println("Radio configured");
+  fastPrintln("Radio configured");
 }
 void gpsInit() {
-  Serial.print("Initializing GPS... ");
+  fastPrint("Initializing GPS... ");
   GPSSerial.begin(9600);
   pinPeripheral(A1, PIO_SERCOM_ALT);
   pinPeripheral(A2, PIO_SERCOM_ALT);
@@ -248,29 +267,31 @@ void gpsInit() {
   //   if (c == '\n' || i == 16) break;
   // }
   // if (strcmp(ackBuf, "$PMTK010,003*2C\n")) { // gps replying successfully set to 0.2hz update
-  //   Serial.println("failed");
+  //   fastPrintln("failed");
   //   while(1);
   // }
-  Serial.println("success");
+  fastPrintln("success");
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~ RADIO TRANSMISSION ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 void transmitData() {
+  #if TOGGLE_ALL_MESSAGES
   if (Serial && Serial.available()) {
-    Serial.println("You are typing something");
+    fastPrintln("You are typing something");
     String input = Serial.readString();
     if (input.equals("kill")) {
-      Serial.println("terminating datalogging...");\
+      fastPrintln("terminating datalogging...");\
       while (1)
         ;
     } else {
-      Serial.println("input ignored");
+      fastPrintln("input ignored");
     }
   }
   verboseMessage("kill check");
+  #endif
 
   if (!bmp.performReading()) {
-    Serial.println("reading error");
+    fastPrintln("reading error");
     delay(10);
     return;
   }
@@ -281,7 +302,7 @@ void transmitData() {
   float pressure = bmp.pressure / 100.0;
   float temperature = bmp.temperature;
   if (!altitude || !pressure || !temperature) {
-    Serial.println("data measurement failure!");
+    fastPrintln("data measurement failure!");
   }
   verboseMessage("bmp valid");
 
@@ -296,7 +317,7 @@ void transmitData() {
   verboseMessage("opened config");
 
   if (!configFile) {
-    Serial.println("error, failed to read gps data file");
+    fastPrintln("error, failed to read gps data file");
   } else {
     // parse raw nmea sentence
     char rmcSentence[128];
@@ -315,6 +336,8 @@ void transmitData() {
     sprintf(foo, "%f", longitude);
     verboseMessage(foo);
     sprintf(foo, "%f", latitude);
+
+    #if TOGGLE_ALL_MESSAGES
     verboseMessage(foo);
     Serial.println(validFix);
     Serial.println(time);
@@ -333,13 +356,16 @@ void transmitData() {
     Serial.print(" long: "); Serial.print(longitude, 4);
     Serial.print(" lat: "); Serial.print(latitude, 4);
     Serial.print(" fix: "); Serial.println(validFix ? "valid" : "invalid");
+    #endif
   }
   verboseMessage("config closed "); 
   verboseMessage(configFile.close() ? "1" : "0");
 
+  #if TOGGLE_ALL_MESSAGES
   Serial.print("Altitude: "); Serial.println(altitude);
   Serial.print("Pressure: "); Serial.println(pressure);
   Serial.print("Temperature: "); Serial.println(temperature);
+  #endif
 
   csvFile = fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT);
   // record data to local file
@@ -372,7 +398,7 @@ void transmitData() {
 
   uint8_t statusMessage[] = "data incoming";
   rf95.send(statusMessage, sizeof(statusMessage));
-  Serial.print("sending request... ");
+  fastPrint("sending request... ");
   rf95.waitPacketSent();
 
   uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
@@ -381,19 +407,19 @@ void transmitData() {
   if (rf95.waitAvailableTimeout(3000)) {
     if (rf95.recv(buf, &len)) {
       if (!strcmp((char *)buf, "ready for data")) {
-          Serial.println("handshake complete");
+          fastPrintln("handshake complete");
           float dataPacket[] = {altitude, pressure, temperature, longitude, latitude, (float)validFix, (float)time, (float)date};
           sendAndWait(dataPacket);
         }
       else {
-        Serial.print("error, recieved message: ");
-        Serial.println((char *)buf);
+        fastPrint("error, recieved message: ");
+        fastPrintln((char *)buf);
       }
     } else {
-      Serial.println("ready check recv failed");
+      fastPrintln("ready check recv failed");
     }
   } else {
-    Serial.println("no response from server during ready check!");
+    fastPrintln("no response from server during ready check!");
   }
 
   delay(1000);
@@ -479,6 +505,7 @@ void sendAndWait(float dataSet[8]) {
   long1, long2, long3, lat1, lat2, lat3, lat4, (uint8_t)validFix,
   hour, min, sec, month, day, year, 0};
   
+  #if TOGGLE_ALL_MESSAGES
   Serial.print("encoded message to send (");
   Serial.print(sizeof(encodedPackets));
   Serial.println(" bytes): ");
@@ -487,7 +514,7 @@ void sendAndWait(float dataSet[8]) {
     Serial.print(" ");
   }
   Serial.println();
-  
+  #endif
   
   rf95.send(encodedPackets, sizeof(encodedPackets));
   rf95.waitPacketSent();
@@ -498,18 +525,18 @@ void sendAndWait(float dataSet[8]) {
   if (rf95.waitAvailableTimeout(500)) {
     if (rf95.recv(buf, &len)) {
       if (!strcmp((char *)buf, "data recieved!!")) { // END CONDITION: TRANSMIT SUCCESS AND REBOOT
-        Serial.println("transmit success");
+        fastPrintln("transmit success");
         fatfs.remove(CONFIG_FILE);
         reboot();
       } else {
-        Serial.print("unexpected reply: ");
-        Serial.println((char *)buf);
+        fastPrint("unexpected reply: ");
+        fastPrintln((char *)buf);
       }
     } else {
-      Serial.println("data recv failed");
+      fastPrintln("data recv failed");
     }
   } else {
-    Serial.println("no response from server during data transfer!");
+    fastPrintln("no response from server during data transfer!");
     return;
   }
 }
@@ -582,10 +609,12 @@ void rmcDecode(char* source, size_t srcLen, float *longit, float *lat, bool *val
 
 // normalize nums like "9" and "4" to "09", "04", etc. (for time+date)
 void addZerosPrint(int num) {
+  #if TOGGLE_ALL_MESSAGES
   if (abs(num) < 10) {
     Serial.print("0");
   } 
   Serial.print(num);
+  #endif
 }
 
 void addZerosPrintToFile(int num) {
@@ -631,7 +660,7 @@ void parseAndStore() {
     delay(1);
     countdown--;
     if (countdown < 0) {
-      Serial.println("no signal from gps, are you sure GPS TX is connected to pin A2?");
+      fastPrintln("no signal from gps, are you sure GPS TX is connected to pin A2?");
       reboot();
     }
   }
@@ -670,36 +699,40 @@ void parseAndStore() {
             sentence[j] = c;
             j++;
           } else {
-            Serial.println("overflow");
+            fastPrintln("overflow");
             j = 0;
           }
       }
       i++;
       if (i > timeoutChars) {
         done = true;
+        #if TOGGLE_ALL_MESSAGES
         Serial.println();
         Serial.print("search timeout reached (");
         Serial.print(timeoutChars);
         Serial.println(") chars");
+        #endif
       }
     } else {
       done = true;
+      #if TOGGLE_ALL_MESSAGES
       Serial.println();
       Serial.print("ended early at index: "); Serial.println(i);
+      #endif
     }
   }
   
   if (rmcValid) {
-    Serial.println();
-    Serial.print("found: ");
-    Serial.println(sentence);
+    fastPrintln();
+    fastPrint("found: ");
+    fastPrintln(sentence);
     // write new gps data to file for radio to transmit
     configFile = fatfs.open(CONFIG_FILE, FILE_WRITE | O_CREAT);
     configFile.write(sentence);
     configFile.close();
     reboot();
   }
-  Serial.println("DONE!");
+  fastPrintln("DONE!");
   delay(500);
   
 }
