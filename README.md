@@ -11,7 +11,7 @@ the onboard avionics consist of:
 - Adafruit BMP390 Altimiter (<https://adafru.it/4816>)
 - Adafruit Ultimate GPS FeatherWing (<https://adafru.it/3133>)
 - Adafruit RFM95W LoRa Radio FeatherWing (<https://adafru.it/3231>)
-- *soon to be incorporated:* Adafruit (<https://adafru.it/5374>)
+- *soon to be incorporated:* Adafruit ADXL375 200g High-G Accelerometer (<https://adafru.it/5374>)
 
 while the ground reciever is just an Adafruit Feather M0 with integrated LoRa (<https://adafru.it/3178>).
 

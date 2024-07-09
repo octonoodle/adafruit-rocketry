@@ -34,8 +34,10 @@ void setup() {
   while (!Serial);  // Wait for serial port to be available
   Serial.print("radio initializing... ");
 
-  if (!rf95.init())
+  if (!rf95.init()) {
     Serial.println("init failed");
+    while(1);
+  }
   // Defaults after init are 434.0MHz, 13dBm, Bw = 125 kHz, Cr = 4/5, Sf = 128chips/symbol, CRC on
   Serial.println("init success");
   rf95.setFrequency(915.0);
