@@ -19,7 +19,7 @@ Serial port;  // The serial port, this is a new instance of the Serial class (an
 PrintWriter output;
 
 String timeDate() {
- return month() + "-" + day() + "-" + year() + "-" + hour() + ":" + minute() + ":" + second();
+ return month() + "-" + day() + "-" + year() + "-" + (hour() % 12) + "-" + minute() + "-" + second() + "-" + (hour() < 12 ? "AM" : "PM");
 }
 
 void setup() {
@@ -29,7 +29,7 @@ void setup() {
  //this isn't a great idea either because as is my case - the serial port used by the ARduino IDE is not the first one...I don't know the
  //Processing code well enough to generalize.
   String portName = "/dev/cu.usbmodem101";
-  port = new Serial(this, portName, 9600);
+  port = new Serial(this, portName, 115200);
   port.clear();  // function from serial library that throws out the first reading, in case we started reading in the middle of a string from Arduino
   //MJ: HARD CODED the path and name of the output file to hold data.  The idea is this is throwaway code where the UI IS the code.
   

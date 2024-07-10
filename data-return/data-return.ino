@@ -38,7 +38,7 @@ FatVolume fatfs;
 
 void setup() {
   // Initialize serial port and wait for it to open before continuing.
-  Serial.begin(9600);
+  Serial.begin(115200);
   while (!Serial) {
     delay(100);
   }

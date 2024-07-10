@@ -36,11 +36,14 @@ Adafruit_BMP3XX bmp;
 Adafruit_NeoPixel rgb(1, 8);  //for status updates during testing
 
 /*          PROGRAM OPTIONS          */
-float SEALEVELPRESSURE_HPA = 1019.6; 
+float SEALEVELPRESSURE_HPA = 1011.51; 
+int dbm = 23; // power of radio (can set from 5 to 23)
+
 #define USE_TEST_MESSAGE false // still read gps serial, but parse and transmit test message instead
 #define VERBOSE_MODE false // describe code execution in detail, good for isolating crash points
-#define WAIT_FOR_SERIAL false // do not start the code unless the serial port is connected (computer)
-#define TOGGLE_ALL_MESSAGES false // if disabled, do not print any messages to Serial. used to increase speed.
+#define WAIT_FOR_SERIAL true // do not start the code unless the serial port is connected (computer)
+#define TOGGLE_ALL_MESSAGES true // if disabled, do not print any messages to Serial. used to increase speed.
+/*                                  */
 
 void verboseMessage(const char* msg) {
   #if VERBOSE_MODE
@@ -62,6 +65,8 @@ void fastPrint(const char* msg) {
   Serial.print(msg);
   #endif
 }
+
+void localEnterData(float longitude = 360.0, float latitude = 360.0, bool validFix = false, int time = -1, int date = -1);
 
 // important flag: this controls whether the chip is running
 // in radio transmit mode (1) or gps data collection mode (0)
@@ -85,7 +90,9 @@ void loop() {
     transmitData();
   } else {
     // this too
+    localEnterData();
     parseAndStore();
+    localEnterData();
   }
 }
 
@@ -165,7 +172,7 @@ void flashInit() {
       ;
   }
   fastPrintln("mounted filesystem");
-  File32 eraseFlag = fatfs.open("noErase.txt", FILE_WRITE);
+  File32 eraseFlag = fatfs.open("noErase.txt", FILE_READ);
   bool truncate = false;
   if (!eraseFlag) {
     truncate = true;
@@ -242,11 +249,11 @@ void rf95Init() {
  // }
   //int power;
   //power = atoi(num);
-  rf95.setTxPower(23, false);
+  rf95.setTxPower(dbm, false);
   fastPrint("power set to ");
-  char dbm[2];
-  sprintf(dbm, "%d", 42);
-  fastPrint(dbm);
+  char dbmStr[2];
+  sprintf(dbmStr, "%d", dbm);
+  fastPrint(dbmStr);
   fastPrintln(" dBm");
 
   fastPrintln("Radio configured");
@@ -273,6 +280,67 @@ void gpsInit() {
   fastPrintln("success");
 }
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~ LOCAL DATA STORAGE ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// record data to csv file
+// assumes BMP390 and flash memory have already been properly initialized
+void localEnterData(float longitude, float latitude, bool validFix, int time, int date) { 
+  // default arguments of 360.0 or -1 means copy previously entered values because there are no new ones
+  // can ether call localEnterData() for just updated bmp, or localEnterData(long, lat, time, date) which updates every field
+
+  if (!bmp.performReading()) {
+    fastPrintln("bmp reading error");
+    delay(10);
+    return;
+  }
+  verboseMessage("bmp read");
+
+  // collect data from BMP390 sensor array
+  float altitude = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+  float pressure = bmp.pressure / 100.0;
+  float temperature = bmp.temperature;
+  if (!altitude || !pressure || !temperature) {
+    fastPrintln("data measurement failure!");
+  }
+  verboseMessage("bmp valid");
+
+  csvFile = fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT);
+  // record data to local file
+  if (csvFile) {
+    csvFile.print("\"");
+    if (date > 0) {
+      addZerosPrintToFile((int)floor(date % 10000 /100)); csvFile.print('/'); 
+      addZerosPrintToFile((int)floor(date/10000)); csvFile.print('/');
+      addZerosPrintToFile(date % 100);
+    }
+    csvFile.print("\",\"");
+    if (time > 0) {
+      addZerosPrintToFile((int)floor(time/10000)); csvFile.print(':');
+      addZerosPrintToFile((int)floor(time % 10000 /100)); csvFile.print(':'); 
+      addZerosPrintToFile((int)(time % 100));
+    }
+    csvFile.print("\","); 
+    csvFile.print(altitude);
+    csvFile.print(",");
+    csvFile.print(pressure);
+    csvFile.print(",");
+    csvFile.print(temperature);
+    csvFile.print(",");
+    if (longitude != 360.0) {
+      csvFile.print(longitude, 4);
+    }
+    csvFile.print(",");
+    if (latitude != 360.0) {
+      csvFile.print(latitude, 4);
+    }
+    csvFile.print(",");
+    csvFile.println(validFix);
+  } else {
+    Serial.println("failed to write data to file");
+  }
+  csvFile.close();
+
+}
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~ RADIO TRANSMISSION ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 void transmitData() {
   #if TOGGLE_ALL_MESSAGES
@@ -291,7 +359,7 @@ void transmitData() {
   #endif
 
   if (!bmp.performReading()) {
-    fastPrintln("reading error");
+    fastPrintln("bmp reading error");
     delay(10);
     return;
   }
@@ -367,34 +435,7 @@ void transmitData() {
   Serial.print("Temperature: "); Serial.println(temperature);
   #endif
 
-  csvFile = fatfs.open("bmp390.csv", FILE_WRITE | O_CREAT);
-  // record data to local file
-  if (csvFile) {
-    csvFile.print("\"");
-    addZerosPrintToFile((int)floor(date % 10000 /100)); csvFile.print('/'); 
-    addZerosPrintToFile((int)floor(date/10000)); csvFile.print('/');
-    addZerosPrintToFile(date % 100);
-    csvFile.print("\",\"");
-    addZerosPrintToFile((int)floor(time/10000)); csvFile.print(':');
-    addZerosPrintToFile((int)floor(time % 10000 /100)); csvFile.print(':'); 
-    addZerosPrintToFile((int)(time % 100));
-    csvFile.print("\","); 
-    csvFile.print(altitude);
-    csvFile.print(",");
-    csvFile.print(pressure);
-    csvFile.print(",");
-    csvFile.print(temperature);
-    csvFile.print(",");
-    csvFile.print(longitude, 4);
-    csvFile.print(",");
-    csvFile.print(latitude, 4);
-    csvFile.print(",");
-    csvFile.println(validFix);
-  } else {
-    Serial.println("failed to write data to file");
-  }
-  csvFile.close();
-
+  localEnterData(longitude, latitude, validFix, time, date);
 
   uint8_t statusMessage[] = "data incoming";
   rf95.send(statusMessage, sizeof(statusMessage));
@@ -425,6 +466,7 @@ void transmitData() {
   delay(1000);
 }
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~ RADIO MESSAGE ENCODING ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 //xxxx.xx,yyyy.yy,zz.zz
 void sendAndWait(float dataSet[8]) {
   // xxyy.zz
@@ -484,7 +526,8 @@ void sendAndWait(float dataSet[8]) {
   }
 
   // xxyyzz
-  uint8_t hour = floor(time/10000);
+  uint8_t hourUTC = floor(time/10000);
+  uint8_t hour = (hourUTC + 19) % 24; // adjust UTC to EST
   uint8_t min = floor(time % 10000 /100);
   uint8_t sec = time % 100;
   // xxyyzz
@@ -730,6 +773,7 @@ void parseAndStore() {
     configFile = fatfs.open(CONFIG_FILE, FILE_WRITE | O_CREAT);
     configFile.write(sentence);
     configFile.close();
+    localEnterData();
     reboot();
   }
   fastPrintln("DONE!");
