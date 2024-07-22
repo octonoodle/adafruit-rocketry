@@ -1,3 +1,7 @@
+// this program collects telemetry for a model rocket and transmits the data to a ground-based server
+// written for the Adafruit Feather M0 or Adafruit Feather ESP32-S2
+// designed to run with companion sketch penguin-ground-server.ino
+
 #include <RH_RF95.h>
 #include <SPI.h>
 #include <SdFat.h>
@@ -236,13 +240,13 @@ void rf95Init() {
   Serial.println("MHz");
   #endif
 
-  //fastPrintln("enter power setting [5-23]:");
+  //Serial.println("enter power setting [5-23]:");
   //while (!Serial.available())
   //  ;
   //int i = 0;
   //char c;
-  //char num[5];
-  //while (Serial.available() && i < 5) {  //get user defined power input
+  //char num[2];
+  //while (Serial.available() && i < 2) {  //get user defined power input
    // c = Serial.read();
    // num[i] = c;
    // i++;
