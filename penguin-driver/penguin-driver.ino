@@ -1,5 +1,5 @@
 // this program collects telemetry for a model rocket and transmits the data to a ground-based server
-// written for the Adafruit Feather M0 or Adafruit Feather ESP32-S2
+// written for the Adafruit Feather M0 Express or Adafruit Feather ESP32-S2
 // designed to run with companion sketch penguin-ground-server.ino
 
 #include <RH_RF95.h>
@@ -23,12 +23,13 @@ File32 csvFile;
 #define CONFIG_FILE "gps-config.txt"
 File32 configFile;
 
-// custom serial port for GPS
+// needed for software reboot
+#ifdef ADAFRUIT_FEATHER_M0
 #include <Arduino.h>   // required before wiring_private.h
 #include "wiring_private.h" // pinPeripheral() function
+#endif
 
-Uart GPSSerial (&sercom4, A2, A1, SERCOM_RX_PAD_1, UART_TX_PAD_0);
-void SERCOM4_Handler() { GPSSerial.IrqHandler(); }
+#define GPSSerial Serial1
 
 #define RFM95_RST 11  // "A"
 #define RFM95_CS 10   // "B"
@@ -105,8 +106,12 @@ void reboot() {
   fastPrintln();
   fastPrintln("REBOOTING...");
   delay(50);
+  #ifdef ADAFRUIT_FEATHER_M0
   __disable_irq();
   NVIC_SystemReset();
+  #elif defined(ESP32) 
+  ESP.restart();
+  #endif
   delay(5000);
   // try to reboot again forever
   reboot();
@@ -265,8 +270,6 @@ void rf95Init() {
 void gpsInit() {
   fastPrint("Initializing GPS... ");
   GPSSerial.begin(9600);
-  pinPeripheral(A1, PIO_SERCOM_ALT);
-  pinPeripheral(A2, PIO_SERCOM_ALT);
 
   // GPSSerial.println("$PMTK220,2000*"); // config command for gps
   // while(!GPSSerial.available());
@@ -408,12 +411,14 @@ void transmitData() {
     sprintf(foo, "%f", longitude);
     verboseMessage(foo);
     sprintf(foo, "%f", latitude);
+    verboseMessage(foo);
 
     #if TOGGLE_ALL_MESSAGES
-    verboseMessage(foo);
+    #if VERBOSE_MODE
     Serial.println(validFix);
     Serial.println(time);
     Serial.println(date);
+    #endif
     short month = floor(date % 10000 /100); 
     short day = floor(date/10000);
     short year = date % 100;
@@ -680,10 +685,11 @@ void addZerosPrintToFile(int num) {
 
 // checks if NMEA sentence is RMC (Recommended Minimum Coordinates) aka GPS data
 bool isRMC(char * sent) {
-  char msgType[6];
+  char msgType[7];
   for (int i = 0; i < 6; i++) {
     msgType[i] = sent[i];
   }
+  msgType[6] = '\0';
   return !strcmp(msgType, "$GNRMC");
 }
 
@@ -736,6 +742,8 @@ void parseAndStore() {
           // 4.
           if (!isRMC(sentence)) {
             // continue to read from serial
+            verboseMessage("found wrong NMEA sentence, looking again...");
+            verboseMessage(sentence);
             delay(25);
             done = false;
             rmcValid = false;

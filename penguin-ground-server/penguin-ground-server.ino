@@ -107,7 +107,7 @@ void loop() {
 
         // wait for real data
         if (rf95.waitAvailableTimeout(5000)) {
-          for(int i; i < RH_RF95_MAX_MESSAGE_LEN; i++) {
+          for(int i = 0; i < RH_RF95_MAX_MESSAGE_LEN; i++) {
             buf[i] = 0; // clear buffer
           }
           len = sizeof(buf);
