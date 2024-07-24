@@ -23,12 +23,6 @@ File32 csvFile;
 #define CONFIG_FILE "gps-config.txt"
 File32 configFile;
 
-// needed for software reboot
-#ifdef ADAFRUIT_FEATHER_M0
-#include <Arduino.h>   // required before wiring_private.h
-#include "wiring_private.h" // pinPeripheral() function
-#endif
-
 #define GPSSerial Serial1
 
 #define RFM95_RST 11  // "A"
@@ -47,7 +41,7 @@ int dbm = 23; // power of radio (can set from 5 to 23)
 #define USE_TEST_MESSAGE false // still read gps serial, but parse and transmit test message instead
 #define VERBOSE_MODE false // describe code execution in detail, good for isolating crash points
 #define WAIT_FOR_SERIAL true // do not start the code unless the serial port is connected (computer)
-#define TOGGLE_ALL_MESSAGES true // if disabled, do not print any messages to Serial. used to increase speed.
+#define TOGGLE_ALL_MESSAGES false // if disabled, do not print any messages to Serial. used to increase speed.
 /*                                  */
 
 void verboseMessage(const char* msg) {
@@ -73,48 +67,18 @@ void fastPrint(const char* msg) {
 
 void localEnterData(float longitude = 360.0, float latitude = 360.0, bool validFix = false, int time = -1, int date = -1);
 
-// important flag: this controls whether the chip is running
-// in radio transmit mode (1) or gps data collection mode (0)
-bool TRANSMIT_MODE;
 
 void setup() {
   serialInit();
   bmpInit();
   flashInit();
-  if (TRANSMIT_MODE) {
-    rf95Init();
-    transmitData();
-  } else {
-    gpsInit();
-  }
+  rf95Init();
+  gpsInit();
 }
 
 void loop() {
-  if (TRANSMIT_MODE) {
-    // this will terminate with a reboot once data is successfully transmitted
-    transmitData();
-  } else {
-    // this too
-    localEnterData();
-    parseAndStore();
-    localEnterData();
-  }
-}
-
-// reboot the chip (same as pressing RST button)
-void reboot() {
-  fastPrintln();
-  fastPrintln("REBOOTING...");
-  delay(50);
-  #ifdef ADAFRUIT_FEATHER_M0
-  __disable_irq();
-  NVIC_SystemReset();
-  #elif defined(ESP32) 
-  ESP.restart();
-  #endif
-  delay(5000);
-  // try to reboot again forever
-  reboot();
+  parseAndStore(); // gps data collection
+  transmitData(); // bmp data collection, local data recording, data transmission
 }
 
 // ~~~~~~~~~~~~ SETUP ~~~~~~~~~~~~~~
@@ -207,20 +171,8 @@ void flashInit() {
     while (1);
   }
   csvFile.close();
-
-  fastPrint("config file... ");
-  configFile  = fatfs.open(CONFIG_FILE, FILE_READ);
-  if (configFile) {
-    TRANSMIT_MODE = true;
-    fastPrintln("found");
-    fastPrintln("Starting in Radio Mode");
-  } else {
-    TRANSMIT_MODE = false;
-    fastPrintln("missing");
-    fastPrintln("Starting in GPS Mode");
-  }
-  configFile.close();
 }
+
 void rf95Init() {
   fastPrint("Radio Client Initializing...");
   pinMode(RFM95_RST, OUTPUT);
@@ -576,10 +528,10 @@ void sendAndWait(float dataSet[8]) {
 
   if (rf95.waitAvailableTimeout(500)) {
     if (rf95.recv(buf, &len)) {
-      if (!strcmp((char *)buf, "data recieved!!")) { // END CONDITION: TRANSMIT SUCCESS AND REBOOT
+      if (!strcmp((char *)buf, "data recieved!!")) { // END OF LOOP: TRANSMIT SUCCESS
         fastPrintln("transmit success");
         fatfs.remove(CONFIG_FILE);
-        reboot();
+        return;
       } else {
         fastPrint("unexpected reply: ");
         fastPrintln((char *)buf);
@@ -675,10 +627,10 @@ void addZerosPrintToFile(int num) {
   } 
   csvFile.print(num);
 }
-// ~~~~~~~~~~~~~~~~~~~~~~~~ GPS LOOP ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// ~~~~~~~~~~~~~~~~~~~~~~~~ GPS DATA PARSING ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // to get RMC sentence:
 // 1. clear buffer
-// 2. wait for gps data
+// 2. wait for gps data (from peripheral chip)
 // 3. slowly read until full sentence is formed
 // 4. parse
 // 5. finish or try again
@@ -714,7 +666,7 @@ void parseAndStore() {
     countdown--;
     if (countdown < 0) {
       fastPrintln("no signal from gps, are you sure GPS TX is connected to pin A2?");
-      reboot();
+      return;
     }
   }
   // 3.
@@ -785,8 +737,6 @@ void parseAndStore() {
     configFile = fatfs.open(CONFIG_FILE, FILE_WRITE | O_CREAT);
     configFile.write(sentence);
     configFile.close();
-    localEnterData();
-    reboot();
   }
   fastPrintln("DONE!");
   delay(500);
