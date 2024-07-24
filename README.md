@@ -7,13 +7,14 @@ it's mostly just (1) the code for the onboard avionics/transmitter and (2) the c
 # hardware
 
 the onboard avionics consist of:
-- Adafruit Feather M0 Express (<https://adafru.it/3403>)
+- ~~Adafruit Feather M0 Express (<https://adafru.it/3403>)~~ *retired (read: lost in a field somewhere)*
+- Adafruit Feather ESP32-S2 (<https://adafru.it/5000>)
 - Adafruit BMP390 Altimiter (<https://adafru.it/4816>)
 - Adafruit Ultimate GPS FeatherWing (<https://adafru.it/3133>)
 - Adafruit RFM95W LoRa Radio FeatherWing (<https://adafru.it/3231>)
 - *soon to be incorporated:* Adafruit ADXL375 200g High-G Accelerometer (<https://adafru.it/5374>)
 
-while the ground reciever is just an Adafruit Feather M0 with integrated LoRa (<https://adafru.it/3178>).
+and the ground reciever is just an Adafruit Feather M0 with integrated LoRa radio (<https://adafru.it/3178>).
 
 # future ideas
 
