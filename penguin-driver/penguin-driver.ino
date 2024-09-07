@@ -35,13 +35,15 @@ Adafruit_BMP3XX bmp;
 Adafruit_NeoPixel rgb(1, 8);  //for status updates during testing
 
 /*          PROGRAM OPTIONS          */
-float SEALEVELPRESSURE_HPA = 1011.51; 
+float SEALEVELPRESSURE_HPA = 1013.1; 
 int dbm = 23; // power of radio (can set from 5 to 23)
+int sampleRate = 10; // non-gps sample rate in Hz (theoretical)
 
 #define USE_TEST_MESSAGE false // still read gps serial, but parse and transmit test message instead
 #define VERBOSE_MODE false // describe code execution in detail, good for isolating crash points
-#define WAIT_FOR_SERIAL true // do not start the code unless the serial port is connected (computer)
-#define TOGGLE_ALL_MESSAGES false // if disabled, do not print any messages to Serial. used to increase speed.
+#define WAIT_FOR_SERIAL false // do not start the code unless the serial port is connected (computer)
+#define TOGGLE_ALL_MESSAGES true // if disabled, do not print any messages to Serial. used to increase speed.
+#define NO_GPS true // disable GPS when enabled, requires definition of sampling frequency
 /*                                  */
 
 void verboseMessage(const char* msg) {
@@ -77,7 +79,9 @@ void setup() {
 }
 
 void loop() {
+  #if !NO_GPS
   parseAndStore(); // gps data collection
+  #endif
   transmitData(); // bmp data collection, local data recording, data transmission
 }
 
@@ -424,7 +428,7 @@ void transmitData() {
     fastPrintln("no response from server during ready check!");
   }
 
-  delay(1000);
+  //delay(1000/sampleRate);
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~ RADIO MESSAGE ENCODING ~~~~~~~~~~~~~~~~~~~~~~~~~~~
