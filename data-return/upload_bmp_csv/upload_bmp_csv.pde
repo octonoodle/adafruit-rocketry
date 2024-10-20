@@ -19,7 +19,15 @@ Serial port;  // The serial port, this is a new instance of the Serial class (an
 PrintWriter output;
 
 String timeDate() {
- return month() + "-" + day() + "-" + year() + "-" + (hour() % 12) + "-" + minute() + "-" + second() + "-" + (hour() < 12 ? "AM" : "PM");
+ return normalize(month()) + "-" + normalize(day()) + "-" + normalize(year()) + "-" + normalize(hour() % 12) + "-" + normalize(minute()) + "-" + normalize(second()) + "-" + (hour() < 12 ? "AM" : "PM");
+}
+
+String normalize(int num) {
+  if (num < 10) {
+    return "0" + num;  
+  } else {
+    return  str(num);
+  }
 }
 
 void setup() {
@@ -28,7 +36,7 @@ void setup() {
  //MJ: BAD PRACTICE - hard coded serial port.  Most of the Processing sketches I saw used the line above to associate a variable to a port
  //this isn't a great idea either because as is my case - the serial port used by the ARduino IDE is not the first one...I don't know the
  //Processing code well enough to generalize.
-  String portName = "/dev/cu.usbmodem101";
+  String portName = "/dev/cu.usbmodem1101";
   port = new Serial(this, portName, 115200);
   port.clear();  // function from serial library that throws out the first reading, in case we started reading in the middle of a string from Arduino
   //MJ: HARD CODED the path and name of the output file to hold data.  The idea is this is throwaway code where the UI IS the code.
