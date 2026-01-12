@@ -2,7 +2,10 @@
 
 this repository hold the software for my hobby rockets' avionics systems.
 
-it's mostly just (1) the code for the onboard avionics/transmitter and (2) the code for the ground receiver.
+originally just contained the main code for the unified sensor driver (penguin)
+(mostly just (1) the code for the onboard avionics/transmitter and (2) the code for the ground receiver)
+
+now also has code for the chute release (initially developed elsewhere) and a GPS-over-LoRa test program I use for range testing antennas.
 
 # hardware
 
