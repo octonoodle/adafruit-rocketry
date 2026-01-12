@@ -21,3 +21,5 @@ and the ground reciever is just an Adafruit Feather M0 with integrated LoRa radi
 - accelerometer data
 - companion GUIs with Processing
 - robotics and active control
+
+<img alt="avionics" src="./avionics.jpeg" width=1000 />
