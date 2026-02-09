@@ -5,17 +5,32 @@ Copyright (c) Auren Amster, October 2025
 control code for a chute release to be used in model rocketry
 
 v1: Jun '25
-v2: Oct '25 (update flash library, add rp2040 support)
+v2: Oct '25 (update flash library, add rp2040 support, update bmp581 library)
+v3: Feb '26 
+  - add SAMD51/M4 support
+  - rewrite check_liftoff() to be less sensitive and work correctly
+  - bring bmp390/581 into same program
 */
 
-/*/ program options /*/
+/*/              program options              /*/
 // pins
-#define SOLENOID_PIN 10  // release mechanism
-#define BMP_INTERRUPT_PIN 12      // data ready interrupt
+#define SOLENOID_PIN 10       // release mechanism
+#define BMP_INTERRUPT_PIN 12  // data ready interrupt
+
+// constants
+#define SEALEVELPRESSURE_HPA 1020.0
+#define DATA_FILE "data.csv"
+
+#define USE_BMP_581 true
+// #define USE_BMP_390 true
+#if USE_BMP_581 == USE_BMP_390
+#error pick an altimeter platform!!
+#endif
 
 // velocity and acceleration calculation
-#define ACCEL_ARRAY_LENGTH 10     // how many positions to hold for finding acceleration
-#define VELOCITY_SAMPLE_LENGTH 3  // how many positions at each end of array to use for v1 and v0
+#define ACCEL_ARRAY_LENGTH 30  // (sugg. >= 20) how many positions to hold for finding acceleration (sampled at ~100 Hz on a Cortex-M4)
+// ACCEL_ARRAY_LENGTH functions to configure the space in time between the static reference point and the high-speed in-launch state
+#define VELOCITY_SAMPLE_LENGTH 7  // (sugg. >= 5)  how many positions at each end of array to average into v1 and v0
 // ex: array length 10, sample length 3:
 // [* * *] * * * * [* * *]
 // v1=x[2]-x[0]   v0=x[9]-x[7]
@@ -24,19 +39,17 @@ v2: Oct '25 (update flash library, add rp2040 support)
 
 #define CHECK_DEPLOY_THRESHOLD_CT 20  // how many times to check alt before being sure to deploy
 
-// constants
-#define SEALEVELPRESSURE_HPA 1022.8
-#define DATA_FILE "data.csv"
-
 // debug etc
 #define WAIT_FOR_SERIAL true
 #define ENABLE_DATALOGGING true
-#define BMP3_USE_INTERRUPT_PIN false  // timer vs hardware interrupt
+#define BMP_USE_INTERRUPT_PIN false  // timer vs hardware interrupt
+#define DISPLAY_ADVANCED_ACCEL false   // show position and velocity information
+#define ENABLE_ACCEL_SAMPLERATE_BENCHMARK true
 // sampling bmp data at 100 Hz. Putting BMP into 200 Hz sampling mode
-/*///////////////////*/
+/*/////////////////////////////////////////////*/
 
-#if defined(ADAFRUIT_ITSYBITSY_M0)
-#define USING_TIMER_TC3 true
+#if defined(_SAMD21_) || defined(_SAMD51_)
+#define USING_TIMER_TC3 true   // only timer supported by SAMD51
 #define USING_TIMER_TC4 false  // Not to use with Servo library
 #define USING_TIMER_TC5 false
 #define USING_TIMER_TCC false
@@ -46,7 +59,7 @@ v2: Oct '25 (update flash library, add rp2040 support)
 #elif defined(ESP32)
 #define SELECTED_TIMER 1  // use ESP timer1
 #elif defined(ARDUINO_ARCH_RP2040)
-#define SELECTED_TIMER 0 // use pseudo-hardware timer 0
+#define SELECTED_TIMER 0  // use pseudo-hardware timer 0
 #endif
 
 #define TIMER_INTERVAL_MS 10  //
@@ -55,21 +68,27 @@ v2: Oct '25 (update flash library, add rp2040 support)
 
 // libraries
 #include <Adafruit_Sensor.h>
+#if USE_BMP_581
+#include "Adafruit_BMP5xx.h"
+#elif USE_BMP_390
 #include "Adafruit_BMP3XX.h"
+#endif
 #if ENABLE_DATALOGGING
 #include <SPI.h>
 #include "SdFat_Adafruit_Fork.h"
 #include <Adafruit_SPIFlash.h>
 #endif
-#if BMP3_USE_INTERRUPT_PIN
 #include <Wire.h>
-#endif
 #include "TimerInterrupt_Generic.h"
 #include "ISR_Timer_Generic.h"
 
 
 // global variables
+#if USE_BMP_581
+Adafruit_BMP5xx bmp;
+#elif USE_BMP_390
 Adafruit_BMP3XX bmp;
+#endif
 #if ENABLE_DATALOGGING
 #include "flash_config.h"
 Adafruit_SPIFlash flash(&flashTransport);
@@ -79,7 +98,7 @@ File32 data_file;
 
 #if defined(ESP32)
 ESP32Timer ITimer(SELECTED_TIMER);
-#elif defined(_SAMD21_)
+#elif defined(_SAMD21_) || defined(_SAMD51_)
 SAMDTimer ITimer(SELECTED_TIMER);
 #elif defined(ARDUINO_ARCH_RP2040)
 RPI_PICO_Timer ITimer(SELECTED_TIMER);
@@ -102,6 +121,11 @@ float past_positions[ACCEL_ARRAY_LENGTH];
 float past_position_timestamps[ACCEL_ARRAY_LENGTH];
 float current_accel = 0;  // calculated acceleration
 
+#if ENABLE_ACCEL_SAMPLERATE_BENCHMARK
+int accel_bench_intrasec_sample_ct;
+int accel_bench_current_sec;
+#endif
+
 float deploy_altitude;
 float ground_altitude;
 int temp_deploy_ct = 0;  // times deploy was triggered so far
@@ -110,9 +134,11 @@ int temp_deploy_ct = 0;  // times deploy was triggered so far
 bool IRAM_ATTR run_isr(void* timerNo) {
 #elif ARDUINO_ARCH_RP2040
 bool run_isr(struct repeating_timer *t) {
-	(void) t;
-#else
+  (void)t;
+#elif defined(_SAMD21_) || defined(_SAMD51_)
 void run_isr() {
+#else
+#error unsupported device architechture!
 #endif
 
   My_ISR_Timer.run();
@@ -166,7 +192,7 @@ void setup() {
   // interrupts
   ITimer.attachInterruptInterval(1000, run_isr);
 
-#if BMP3_USE_INTERRUPT_PIN
+#if BMP_USE_INTERRUPT_PIN
   attachInterrupt(digitalPinToInterrupt(BMP_INTERRUPT_PIN), bmp_sample, RISING);
 #else
   Serial.print("configuring timer-based sampling interrupt...");
@@ -223,6 +249,9 @@ void loop() {
       if (fresh_data) {
         update_positions();
         check_liftoff();
+#if ENABLE_ACCEL_SAMPLERATE_BENCHMARK
+        accel_benchmark_update();
+#endif
         // Serial.println(bmp.readAltitude(SEALEVELPRESSURE_HPA));
         fresh_data = false;
       } else {
@@ -253,9 +282,15 @@ void bmp_init() {
   // Wire.end();
   // Serial.println("success");
 
+  #if USE_BMP_581
+  Serial.print("initializing bmp581...");
+  if (!bmp.begin(BMP5XX_ALTERNATIVE_ADDRESS, &Wire)) {
 
+  #elif USE_BMP_390
   Serial.print("initializing bmp390...");
   if (!bmp.begin_I2C()) {
+
+  #endif
     Serial.println("failed");
     while (1)
       ;
@@ -263,14 +298,23 @@ void bmp_init() {
   Serial.println("success");
 
   Serial.print("configuring built-in options...");
+  #if USE_BMP_581
+  if (!bmp.setPressureOversampling(BMP5XX_OVERSAMPLING_8X)
+      || !bmp.setOutputDataRate(BMP5XX_ODR_240_HZ)
+      || !bmp.setIIRFilterCoeff(BMP5XX_IIR_FILTER_COEFF_3)) {  // data smoothing
+
+  #elif USE_BMP_390
   if (!bmp.setPressureOversampling(BMP3_OVERSAMPLING_8X)
       || !bmp.setOutputDataRate(BMP3_ODR_200_HZ)
       || !bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3)) {  // data smoothing
+
+  #endif
     Serial.println("failed");
     while (1)
       ;
   }
   Serial.println("success");
+  
 }
 
 #if ENABLE_DATALOGGING
@@ -353,11 +397,11 @@ void update_positions() {
 
   past_positions[0] = last_altitude;
   past_position_timestamps[0] = last_new_data_time;
-  Serial.print("[");
-  Serial.print(past_positions[0]);
-  Serial.print(",");
-  Serial.print(past_position_timestamps[0], 3);
-  Serial.println("]");
+  // Serial.print("[");
+  // Serial.print(past_positions[0]);
+  // Serial.print(",");
+  // Serial.print(past_position_timestamps[0], 3);
+  // Serial.println("]");
 }
 
 bool hit_upwards = false;    // have we gotten to deploy alt the first time
@@ -389,7 +433,8 @@ void check_deploy() {  // are we up yet?
         deployed = true;
       } else {
         temp_deploy_ct++;
-        Serial.print("deploy count at: "); Serial.println(temp_deploy_ct);
+        Serial.print("deploy count at: ");
+        Serial.println(temp_deploy_ct);
       }
     }
   }
@@ -399,14 +444,36 @@ void check_liftoff() {
   // Serial.println("are we there yet");
   // a = (v1 - v0) / dt
   // v = (x1 - x0) / dt
-  float v0 =
-    (past_positions[ACCEL_ARRAY_LENGTH - 1] - past_positions[ACCEL_ARRAY_LENGTH - VELOCITY_SAMPLE_LENGTH]) / (past_position_timestamps[ACCEL_ARRAY_LENGTH - 1] - past_position_timestamps[ACCEL_ARRAY_LENGTH - VELOCITY_SAMPLE_LENGTH]);
+  float dt0 = past_position_timestamps[ACCEL_ARRAY_LENGTH - 1] - past_position_timestamps[ACCEL_ARRAY_LENGTH - VELOCITY_SAMPLE_LENGTH];
+  float dx0 = past_positions[ACCEL_ARRAY_LENGTH - 1] - past_positions[ACCEL_ARRAY_LENGTH - VELOCITY_SAMPLE_LENGTH];
+  float v0 = dx0 / dt0;
 
-  float v1 =
-    (past_positions[VELOCITY_SAMPLE_LENGTH - 1] - past_positions[0]) / (past_position_timestamps[VELOCITY_SAMPLE_LENGTH - 1] - past_position_timestamps[0]);
+  float dt1 = past_position_timestamps[VELOCITY_SAMPLE_LENGTH - 1] - past_position_timestamps[0];
+  float dx1 = past_positions[VELOCITY_SAMPLE_LENGTH - 1] - past_positions[0];
+  float v1 = dx1 / dt1;
 
-  float a = (v1 - v0) / ((past_position_timestamps[ACCEL_ARRAY_LENGTH - 1] + past_position_timestamps[ACCEL_ARRAY_LENGTH - VELOCITY_SAMPLE_LENGTH] - (past_position_timestamps[VELOCITY_SAMPLE_LENGTH - 1] + past_position_timestamps[0])) / 2);
+  float t0_avg = (past_position_timestamps[ACCEL_ARRAY_LENGTH - 1] + past_position_timestamps[ACCEL_ARRAY_LENGTH - VELOCITY_SAMPLE_LENGTH]) / 2;
+  float t1_avg = (past_position_timestamps[VELOCITY_SAMPLE_LENGTH - 1] + past_position_timestamps[0]) / 2;
+
+  float a = (v1 - v0) / (t1_avg - t0_avg);
   // time "at" v: center of time interval = avg time: (t1 - t0) / 2
+
+#if DISPLAY_ADVANCED_ACCEL
+  Serial.print("v1: ");
+  Serial.print(v1);
+  Serial.print(" m/s, v0: ");
+  Serial.print(v0);
+  Serial.println(" m/s");
+
+  Serial.print("t1_avg: ");
+  Serial.print(t1_avg);
+  Serial.print(" s, t0_avg: ");
+  Serial.print(t0_avg);
+  Serial.print(" s, dt: ");
+  Serial.print(t1_avg - t0_avg);
+  Serial.println(" s");
+#endif
+
   Serial.print("accel: ");
   Serial.print(a, 3);
   Serial.println(" m/s^2");
@@ -416,6 +483,18 @@ void check_liftoff() {
     launched = true;
   }
 }
+
+#if ENABLE_ACCEL_SAMPLERATE_BENCHMARK
+void accel_benchmark_update() {
+  if (secs == accel_bench_current_sec) {
+    accel_bench_intrasec_sample_ct++;
+  } else {
+    accel_bench_current_sec = secs;
+    Serial.print("\n\naccel sampling: "); Serial.print(accel_bench_intrasec_sample_ct); Serial.println(" Hz\n");
+    accel_bench_intrasec_sample_ct = 0;
+  }
+}
+#endif
 
 #if ENABLE_DATALOGGING
 void log_data_csv() {
