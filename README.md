@@ -21,11 +21,6 @@ the onboard avionics consist of:
 
 and the ground reciever is just an Adafruit Feather M0 with integrated LoRa radio (<https://adafru.it/3178>).
 
-# to-do
-- chute-release/altimeter: add Cortex-M4 support (\_SAMD51\_ same ifdefs as \_SAMD21\_)
-- chute-release/altimeter: collapse altimeter versions into one file with altimeter option
-- chute-release/altimeter: safe, complete SPI flash writes on every log entry
-
 # future ideas
 
 - discrete SD card for reliability
