@@ -18,11 +18,11 @@ v3: Feb '26
 #define BMP_INTERRUPT_PIN 12  // data ready interrupt
 
 // constants
-#define SEALEVELPRESSURE_HPA 1020.0
+#define SEALEVELPRESSURE_HPA 1033.8
 #define DATA_FILE "data.csv"
 
-#define USE_BMP_581 true
-// #define USE_BMP_390 true
+// #define USE_BMP_581 true
+#define USE_BMP_390 true
 #if USE_BMP_581 == USE_BMP_390
 #error pick an altimeter platform!!
 #endif
@@ -327,6 +327,16 @@ void flash_init() {
   }
   Serial.println("success");
 
+
+  Serial.print("checking flash FS allocation size...");
+  int FS_size = flash.size();
+  Serial.print(FS_size / 1024);
+  Serial.println("KB allocated");
+  if (!FS_size) {
+    Serial.println("error, no flash space allocated for filesystem!");
+    while(1);
+  }
+
   Serial.print("mounting filesystem...");
   if (!fatfs.begin(&flash)) {
     Serial.println("failed");
@@ -529,9 +539,14 @@ void maybe_recover_data() {
   }
   Serial.println(buffer);
 
-  if (strcmp(buffer, "y")) {  // not equals y
+  if (!strcmp(buffer, "n")) {  // continue
     return;
-  } else {
+  } else if (strcmp(buffer, "y")) { // not equals y
+    Serial.print("error, unrecognized option \"");
+    Serial.print(buffer);
+    Serial.println("\"");
+    while(1);
+  } else { // equals y
     while (!Serial.available()) delayMicroseconds(10);
     // Open the file for reading and check that it was successfully opened.
     // The FILE_READ mode will open the file for reading.
